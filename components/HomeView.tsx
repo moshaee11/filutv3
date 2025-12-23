@@ -1,35 +1,35 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
 import { 
   PlusCircle, Wallet, FileText, Send, 
   ChevronRight, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, PackageCheck, ShoppingBag, X, Info, Search, UserCheck, Plus, CheckCircle2,
-  Truck, Store, Tag, AlertTriangle, ShieldAlert
+  Truck, Store, Tag, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight
 } from 'lucide-react';
 import { OrderStatus } from '../types';
 
 const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) => {
-  const { data } = useApp();
+  const { data, importData } = useApp();
   const [activeModal, setActiveModal] = useState<'repayment' | 'expense' | null>(null);
   
   // Backup Alert State
   const [showBackupAlert, setShowBackupAlert] = useState(false);
   const [needsBackup, setNeedsBackup] = useState(false);
 
+  // Sync/Import State
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncContent, setSyncContent] = useState('');
+
   useEffect(() => {
-    // Check backup status on mount
     const checkBackupStatus = () => {
         const lastBackupStr = localStorage.getItem('LAST_BACKUP_TIME');
-        // Logic: Needs backup if never backed up OR last backup was > 3 days ago
         const isNeeded = !lastBackupStr || (Date.now() - new Date(lastBackupStr).getTime() > 3 * 24 * 60 * 60 * 1000);
-        
         setNeedsBackup(isNeeded);
 
         if (isNeeded) {
-            const todayStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+            const todayStr = new Date().toISOString().split('T')[0];
             const lastPromptDate = localStorage.getItem('HOME_BACKUP_PROMPT_DATE');
-            
-            // If prompt hasn't been shown today, show it
             if (lastPromptDate !== todayStr) {
                 setShowBackupAlert(true);
                 localStorage.setItem('HOME_BACKUP_PROMPT_DATE', todayStr);
@@ -50,9 +50,25 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
     const repayments = data.repayments.filter(r => new Date(r.date).getTime() >= startOfToday);
     const orderAmount = orders.reduce((sum, o) => sum + o.totalAmount, 0);
     const receivedAmount = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
-    const repaymentAmount = repayments.reduce((sum, r) => sum + r.amount, 0);
-    return { orderAmount, receivedAmount, debtAmount: orderAmount - receivedAmount, repaymentAmount, activeBatches: data.batches.filter(b => !b.isClosed).length };
+    const debtAmount = orderAmount - receivedAmount;
+    const activeBatches = data.batches.filter(b => !b.isClosed).length;
+    return { orderAmount, receivedAmount, debtAmount, activeBatches };
   }, [data]);
+
+  const handleSyncImport = () => {
+      if (!syncContent) return;
+      try {
+        const base64 = btoa(unescape(encodeURIComponent(syncContent)));
+        importData(base64);
+        alert('✅ 数据同步成功！');
+        setShowSyncModal(false);
+        setSyncContent('');
+      } catch (e) {
+        alert('❌ 格式错误：请确保复制了完整的数据文本');
+      }
+  };
+
+  const isEmptyData = data.orders.length === 0 && data.products.length === 0 && data.batches.length === 0;
 
   return (
     <div className="min-h-screen bg-[#F4F7FA] pb-32">
@@ -61,8 +77,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
         <div className="flex justify-between items-start mb-6">
           <div className="space-y-1">
             <h2 className="text-2xl font-black tracking-tight flex items-center gap-2">砂糖橘批发助手 Pro</h2>
-            {/* 常驻红字提示 */}
-            {needsBackup && (
+            {needsBackup && !isEmptyData && (
                 <div className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded-md mt-1 shadow-sm animate-pulse">
                     <AlertTriangle size={10} className="text-red-500" fill="currentColor" />
                     <span className="text-[10px] font-black text-red-500">建议立即备份数据</span>
@@ -77,7 +92,29 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
         </div>
       </div>
 
-      <div className="px-4 -mt-8 relative z-10">
+      <div className="px-4 -mt-8 relative z-10 space-y-4">
+        {/* 数据同步引导卡片：更明确的引导文案 */}
+        {isEmptyData && (
+            <div className="bg-gray-900 rounded-[2rem] p-6 shadow-xl text-white flex flex-col gap-4 animate-in slide-in-from-top-4 border border-gray-700">
+                <div className="flex justify-between items-start">
+                    <div>
+                        <h3 className="font-black text-xl flex items-center gap-2 text-emerald-400"><ClipboardPaste size={24}/> 数据接力</h3>
+                        <p className="text-sm text-gray-300 mt-1 font-bold">是从微信跳转过来的吗？</p>
+                    </div>
+                    <div className="bg-white/10 p-2 rounded-xl"><ArrowRight size={20}/></div>
+                </div>
+                <div className="bg-white/5 p-3 rounded-xl border border-white/5">
+                    <p className="text-xs text-gray-400">如果在微信里已经点了“复制”，请点击下方按钮粘贴，数据将立即恢复。</p>
+                </div>
+                <button 
+                    onClick={() => setShowSyncModal(true)}
+                    className="w-full bg-emerald-500 text-white py-4 rounded-xl font-black text-sm flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all"
+                >
+                    点击粘贴数据
+                </button>
+            </div>
+        )}
+
         <div className="bg-white p-6 rounded-[2rem] shadow-sm flex justify-between items-center gap-4 border border-gray-100">
            <button onClick={() => setActiveModal('repayment')} className="flex flex-col items-center gap-3 active:scale-90 flex-1 group transition-all">
               <div className="w-14 h-14 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center shadow-inner group-active:bg-emerald-100 transition-colors"><ArrowDownCircle size={32} /></div>
@@ -105,8 +142,34 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
       </div>
       {activeModal && <QuickModal type={activeModal} onClose={() => setActiveModal(null)} />}
 
-      {/* 每日首次打开时的备份提醒弹窗 */}
-      {showBackupAlert && (
+      {/* 首页直接同步数据弹窗 */}
+      {showSyncModal && (
+        <div className="fixed inset-0 z-[500] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 space-y-4 shadow-2xl flex flex-col">
+                <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-black text-gray-800">粘贴以同步数据</h3>
+                    <button onClick={() => setShowSyncModal(false)} className="p-1 bg-gray-100 rounded-full"><X size={20}/></button>
+                </div>
+                <p className="text-xs text-gray-400">请长按下方输入框 -> 选择“粘贴”：</p>
+                <textarea 
+                    value={syncContent}
+                    onChange={e => setSyncContent(e.target.value)}
+                    className="w-full h-32 bg-gray-50 rounded-xl p-3 text-xs font-mono border-2 border-transparent focus:border-blue-500 focus:bg-white outline-none resize-none"
+                    placeholder='在这里粘贴刚才复制的代码...'
+                    autoFocus
+                ></textarea>
+                <button 
+                    onClick={handleSyncImport}
+                    className="w-full bg-emerald-500 text-white py-3 rounded-xl font-black active:scale-95 transition-all shadow-lg shadow-emerald-200"
+                >
+                    确认恢复数据
+                </button>
+            </div>
+        </div>
+      )}
+
+      {/* 每日首次打开时的备份提醒弹窗 (非空数据时) */}
+      {showBackupAlert && !isEmptyData && (
         <div className="fixed inset-0 z-[400] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
             <div className="bg-white w-full max-w-xs rounded-[2rem] p-6 space-y-4 shadow-2xl animate-in zoom-in-95 text-center">
                 <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto">
@@ -124,6 +187,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
   );
 };
 
+// QuickModal 组件保持不变，省略以节省空间...
 const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void }> = ({ type, onClose }) => {
   const { data, addRepayment, addExpense, addCustomer } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');

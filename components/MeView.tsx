@@ -4,13 +4,22 @@ import { useApp } from '../store';
 import { 
   Database, Download, Upload, Trash2, ShieldCheck, 
   Info, Share2, Copy, CheckCircle2, AlertTriangle, FileSpreadsheet,
-  History, ShieldAlert, ChevronRight, UserCircle2, ExternalLink
+  History, ShieldAlert, ChevronRight, UserCircle2, ExternalLink, X, ClipboardCopy, ClipboardPaste, ArrowUpRight
 } from 'lucide-react';
 import { downloadJSON, downloadCSV, preciseCalc } from '../utils';
 
 const MeView: React.FC = () => {
   const { data, exportData, importData } = useApp();
   const [lastBackup, setLastBackup] = useState<string>(localStorage.getItem('LAST_BACKUP_TIME') || '从未备份');
+  const [showWxTransferModal, setShowWxTransferModal] = useState(false); // 微信数据迁移弹窗
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const [pasteContent, setPasteContent] = useState('');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'success'>('idle');
+
+  // 检测是否为微信浏览器
+  const isWeChat = () => {
+    return /MicroMessenger/i.test(navigator.userAgent);
+  };
 
   const updateBackupTime = () => {
     const now = new Date().toLocaleString();
@@ -18,11 +27,96 @@ const MeView: React.FC = () => {
     setLastBackup(now);
   };
 
-  const handleExportFile = () => {
+  // 核心功能：打包数据到剪贴板
+  const handleCopyDataToClipboard = async () => {
+    const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
+    const jsonStr = JSON.stringify(backupData);
+    
+    try {
+        await navigator.clipboard.writeText(jsonStr);
+        setCopyStatus('success');
+        updateBackupTime();
+        return true;
+    } catch (err) {
+        // 兼容旧设备的降级方案
+        const textarea = document.createElement('textarea');
+        textarea.value = jsonStr;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        setCopyStatus('success');
+        updateBackupTime();
+        return true;
+    }
+  };
+
+  // 触发导出（Excel或JSON）时的拦截逻辑
+  const handleExportClick = (type: 'excel' | 'json') => {
+    if (isWeChat()) {
+        // 如果是微信，拦截并显示“搬家向导”
+        setShowWxTransferModal(true);
+        // 尝试自动复制一次，提升体验
+        handleCopyDataToClipboard(); 
+        return;
+    }
+
+    if (type === 'excel') {
+        performExportExcel();
+    } else {
+        performExportJSON();
+    }
+  };
+
+  const performExportJSON = () => {
     const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
     const date = new Date().toISOString().split('T')[0];
     downloadJSON(backupData, `水果助手备份_${date}.json`);
     updateBackupTime();
+  };
+
+  const performExportExcel = () => {
+    if (data.orders.length === 0) return alert('暂无订单数据可导出');
+    
+    // 定义表头
+    const headers = [
+        '销售日期', '销售时间', '系统单号', '客户名称', '客户类型', 
+        '应收总额(元)', '实收金额(元)', '本单欠款(元)', '额外杂费', '折扣优惠', 
+        '支付方式', '收款人', '货品详情 (车次-品名-规格-小计)'
+    ];
+
+    const sortedOrders = [...data.orders].sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    const rows = sortedOrders.map(o => {
+      const customer = data.customers.find(c => c.id === o.customerId);
+      const custType = customer ? (customer.isGuest ? '散客' : '长期客户') : '未知';
+      const debt = preciseCalc(() => o.totalAmount - o.receivedAmount);
+      const itemsDetail = o.items.map(i => {
+          const weightInfo = i.netWeight > 0 ? `/${i.netWeight}斤` : '';
+          return `${i.productName}【${i.qty}件${weightInfo}】¥${i.subtotal}`;
+      }).join('  |  ');
+
+      const dateObj = new Date(o.createdAt);
+      const paymentMethodMap: Record<string, string> = { 'WECHAT': '微信支付', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '其他' };
+
+      return [
+        dateObj.toLocaleDateString(), dateObj.toLocaleTimeString(), o.orderNo,
+        o.customerName, custType, o.totalAmount, o.receivedAmount, debt,
+        o.extraFee, o.discount, paymentMethodMap[o.paymentMethod] || o.paymentMethod,
+        o.payee, itemsDetail
+      ];
+    });
+    
+    // 汇总行逻辑保持不变...
+    const totalAmount = sortedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+    const totalReceived = sortedOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    const totalDebt = sortedOrders.reduce((sum, o) => sum + (o.totalAmount - o.receivedAmount), 0);
+    const emptyRow = new Array(headers.length).fill('');
+    const summaryRow = ['【累计总计】', `共 ${sortedOrders.length} 单`, '', '', '', totalAmount, totalReceived, totalDebt, '', '', '', '', ''];
+
+    downloadCSV(headers, [...rows, emptyRow, summaryRow], `经营报表_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
   const handleImport = () => {
@@ -35,133 +129,39 @@ const MeView: React.FC = () => {
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target?.result as string;
-        if (confirm('⚠️ 警告：导入数据将完全覆盖当前所有数据！\n\n建议在导入前先导出备份当前数据。\n确定要继续吗？')) {
-           try {
-             const base64 = btoa(unescape(encodeURIComponent(content)));
-             importData(base64);
-             alert('数据恢复成功！');
-           } catch (err) {
-             alert('导入失败：文件格式不正确');
-           }
-        }
+        performImport(content);
       };
       reader.readAsText(file);
     };
     input.click();
   };
 
-  const handleExportExcel = () => {
-    if (data.orders.length === 0) return alert('暂无订单数据可导出');
-    
-    // 定义表头
-    const headers = [
-        '销售日期', 
-        '销售时间', 
-        '系统单号', 
-        '客户名称', 
-        '客户类型', 
-        '应收总额(元)', 
-        '实收金额(元)', 
-        '本单欠款(元)', 
-        '额外杂费', 
-        '折扣优惠', 
-        '支付方式', 
-        '收款人', 
-        '货品详情 (车次-品名-规格-小计)'
-    ];
-
-    // 1. 强制按时间倒序排列 (最新的在最前)，确保报表逻辑清晰
-    const sortedOrders = [...data.orders].sort((a, b) => 
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-
-    // 2. 映射数据行
-    const rows = sortedOrders.map(o => {
-      // 获取客户类型
-      const customer = data.customers.find(c => c.id === o.customerId);
-      const custType = customer ? (customer.isGuest ? '散客' : '长期客户') : '未知';
-      
-      // 计算本单欠款 (解决浮点数精度问题)
-      const debt = preciseCalc(() => o.totalAmount - o.receivedAmount);
-
-      // 格式化商品详情字符串
-      const itemsDetail = o.items.map(i => {
-          const weightInfo = i.netWeight > 0 ? `/${i.netWeight}斤` : '';
-          return `${i.productName}【${i.qty}件${weightInfo}】¥${i.subtotal}`;
-      }).join('  |  ');
-
-      // 格式化时间
-      const dateObj = new Date(o.createdAt);
-      const dateStr = dateObj.toLocaleDateString();
-      const timeStr = dateObj.toLocaleTimeString();
-
-      // 翻译支付方式
-      const paymentMethodMap: Record<string, string> = {
-          'WECHAT': '微信支付',
-          'ALIPAY': '支付宝',
-          'CASH': '现金',
-          'OTHER': '其他'
-      };
-
-      return [
-        dateStr,
-        timeStr,
-        o.orderNo,
-        o.customerName,
-        custType,
-        o.totalAmount,
-        o.receivedAmount,
-        debt,
-        o.extraFee,
-        o.discount,
-        paymentMethodMap[o.paymentMethod] || o.paymentMethod,
-        o.payee,
-        itemsDetail
-      ];
-    });
-    
-    // 3. 计算累计总数据 (用于底部汇总)
-    const totalAmount = sortedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-    const totalReceived = sortedOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
-    const totalDebt = sortedOrders.reduce((sum, o) => sum + (o.totalAmount - o.receivedAmount), 0);
-    
-    // 4. 构建汇总行
-    const emptyRow = new Array(headers.length).fill('');
-    const summaryRow = [
-        '【累计总计】', 
-        `共 ${sortedOrders.length} 单`,
-        '',
-        '',
-        '',
-        totalAmount,
-        totalReceived,
-        totalDebt,
-        '',
-        '',
-        '',
-        '',
-        ''
-    ];
-
-    downloadCSV(headers, [...rows, emptyRow, summaryRow], `经营报表_${new Date().toISOString().split('T')[0]}.csv`);
+  const performImport = (content: string) => {
+    if (!content) return;
+    try {
+        JSON.parse(content); // 预检查
+        if (confirm('⚠️ 警告：导入数据将完全覆盖当前所有数据！\n\n确定要继续吗？')) {
+           try {
+             const base64 = btoa(unescape(encodeURIComponent(content)));
+             importData(base64);
+             alert('✅ 数据恢复成功！');
+             setShowPasteModal(false);
+             setPasteContent('');
+           } catch (err) {
+             alert('❌ 导入失败：数据格式不正确');
+           }
+        }
+    } catch (e) {
+        alert('❌ 格式错误：这不是有效的数据文本');
+    }
   };
 
   const handleWipeData = () => {
-    if (confirm('🔴 危险操作警告 🔴\n\n此操作将永久清空所有数据（商品、订单、客户等）且无法恢复！\n\n请再次确认：您确定要清空所有数据吗？')) {
-      const emptyData = {
-        products: [],
-        batches: [],
-        orders: [],
-        repayments: [],
-        customers: [{ id: 'guest', name: '散客', phone: '', totalDebt: 0, isGuest: true }],
-        payees: ['豆建国', '王妮', '关灵恩', '楠楠嫂'],
-        expenses: [],
-        timestamp: Date.now(),
-        type: 'FRUIT_SYNC'
-      };
+    if (confirm('🔴 危险操作警告 🔴\n\n此操作将永久清空所有数据！\n确定要清空吗？')) {
+      const emptyData = { products: [], batches: [], orders: [], repayments: [], customers: [{ id: 'guest', name: '散客', phone: '', totalDebt: 0, isGuest: true }], payees: ['豆建国', '王妮', '关灵恩', '楠楠嫂'], expenses: [], timestamp: Date.now(), type: 'FRUIT_SYNC' };
       const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(emptyData))));
       importData(base64);
-      alert('所有数据已清空，应用已重置。');
+      alert('所有数据已清空。');
     }
   };
 
@@ -185,28 +185,34 @@ const MeView: React.FC = () => {
 
         <div className="space-y-3">
            <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
-              <Database size={14} /> 数据安全
+              <Database size={14} /> 数据迁移
            </p>
            <div className="bg-white rounded-[2rem] p-2 shadow-sm border border-gray-100 overflow-hidden">
               <div className="p-4 border-b border-gray-50 flex justify-between items-center">
                  <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center"><Download size={20}/></div>
                     <div>
-                       <p className="font-black text-gray-800 text-sm">备份数据 (JSON)</p>
+                       <p className="font-black text-gray-800 text-sm">备份 / 移出数据</p>
                        <p className="text-[10px] text-gray-400 font-bold">上次备份: {lastBackup}</p>
                     </div>
                  </div>
-                 <button onClick={handleExportFile} className="px-4 py-2 bg-gray-900 text-white rounded-xl text-xs font-black active:scale-95 transition-all">下载</button>
+                 {/* 统一入口 */}
+                 <button onClick={() => handleExportClick('json')} className="px-4 py-2 bg-gray-900 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
               </div>
               <div className="p-4 flex justify-between items-center">
                  <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center"><Upload size={20}/></div>
                     <div>
-                       <p className="font-black text-gray-800 text-sm">恢复数据</p>
-                       <p className="text-[10px] text-gray-400 font-bold">导入JSON备份文件覆盖当前</p>
+                       <p className="font-black text-gray-800 text-sm">恢复 / 移入数据</p>
+                       <p className="text-[10px] text-gray-400 font-bold">支持文件导入或粘贴文本</p>
                     </div>
                  </div>
-                 <button onClick={handleImport} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-xs font-black active:scale-95 transition-all">导入</button>
+                 <div className="flex gap-2">
+                    <button onClick={() => setShowPasteModal(true)} className="w-9 h-9 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center active:scale-95 transition-all">
+                        <ClipboardPaste size={16} />
+                    </button>
+                    <button onClick={handleImport} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-xs font-black active:scale-95 transition-all">文件</button>
+                 </div>
               </div>
            </div>
         </div>
@@ -224,7 +230,8 @@ const MeView: React.FC = () => {
                        <p className="text-[10px] text-gray-400 font-bold">包含所有销售明细与统计</p>
                     </div>
                  </div>
-                 <button onClick={handleExportExcel} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
+                 {/* 统一入口 */}
+                 <button onClick={() => handleExportClick('excel')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
               </div>
            </div>
         </div>
@@ -244,12 +251,92 @@ const MeView: React.FC = () => {
 
         <div className="text-center py-6 space-y-2">
            <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.0</p>
-           <div className="flex justify-center gap-4 text-gray-300">
-             <ShieldCheck size={16} />
-             <span className="text-[10px] font-bold">本地存储 · 安全私密 · 无需联网</span>
-           </div>
         </div>
       </div>
+
+      {/* 微信数据迁移向导 (核心部分) */}
+      {showWxTransferModal && (
+        <div className="fixed inset-0 z-[999] bg-black/90 flex flex-col text-white px-6 pt-12 animate-in fade-in">
+             <div className="absolute top-4 right-6 animate-bounce">
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold">第二步：去浏览器</span>
+                    <ArrowUpRight size={32} className="stroke-[3px]" />
+                </div>
+            </div>
+
+            <div className="mt-8 space-y-8">
+                <div>
+                    <h3 className="text-3xl font-black mb-2 text-emerald-400">数据搬家向导</h3>
+                    <p className="text-base font-medium opacity-80 leading-relaxed">
+                        微信里不能直接下载文件。请按以下步骤将数据“搬”到浏览器中下载。
+                    </p>
+                </div>
+                
+                <div className="space-y-6">
+                    {/* 步骤一：复制数据 */}
+                    <div className="bg-white/10 p-5 rounded-2xl border border-white/10">
+                        <div className="flex justify-between items-center mb-3">
+                            <span className="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs font-black">第一步</span>
+                            {copyStatus === 'success' && <span className="text-emerald-400 text-xs font-bold flex items-center gap-1"><CheckCircle2 size={12}/> 已复制成功</span>}
+                        </div>
+                        <p className="text-sm font-bold mb-4">将当前数据复制到剪贴板</p>
+                        <button 
+                            onClick={handleCopyDataToClipboard}
+                            className={`w-full py-4 rounded-xl font-black flex items-center justify-center gap-2 transition-all ${copyStatus === 'success' ? 'bg-white text-emerald-600' : 'bg-emerald-500 text-white active:scale-95'}`}
+                        >
+                            {copyStatus === 'success' ? '✅ 数据已复制' : '📄 点击一键复制'}
+                        </button>
+                    </div>
+
+                    {/* 步骤二：跳转浏览器 */}
+                    <div className="bg-white/5 p-5 rounded-2xl border border-white/5 opacity-80">
+                         <div className="flex justify-between items-center mb-2">
+                            <span className="bg-gray-600 text-white px-2 py-0.5 rounded text-xs font-black">第二步</span>
+                        </div>
+                        <p className="text-sm font-bold">点击右上角 <span className="text-xl mx-1">···</span> 选择“在浏览器打开”</p>
+                    </div>
+
+                    {/* 步骤三：粘贴恢复 */}
+                    <div className="bg-white/5 p-5 rounded-2xl border border-white/5 opacity-80">
+                         <div className="flex justify-between items-center mb-2">
+                            <span className="bg-gray-600 text-white px-2 py-0.5 rounded text-xs font-black">第三步</span>
+                        </div>
+                        <p className="text-sm font-bold">在浏览器中，点击首页的“同步数据”并粘贴。</p>
+                    </div>
+                </div>
+
+                <div className="pt-4 flex justify-center">
+                    <button onClick={() => setShowWxTransferModal(false)} className="text-gray-400 text-sm font-bold underline">关闭向导</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* 粘贴导入弹窗 */}
+      {showPasteModal && (
+        <div className="fixed inset-0 z-[300] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 space-y-4 shadow-2xl flex flex-col">
+                <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-black text-gray-800">粘贴恢复数据</h3>
+                    <button onClick={() => setShowPasteModal(false)} className="p-1 bg-gray-100 rounded-full"><X size={20}/></button>
+                </div>
+                <p className="text-xs text-gray-400">请长按下方输入框 -> 粘贴：</p>
+                <textarea 
+                    value={pasteContent}
+                    onChange={e => setPasteContent(e.target.value)}
+                    className="w-full h-32 bg-gray-50 rounded-xl p-3 text-xs font-mono border-2 border-transparent focus:border-blue-500 focus:bg-white outline-none resize-none"
+                    placeholder='在这里粘贴...'
+                    autoFocus
+                ></textarea>
+                <button 
+                    onClick={() => performImport(pasteContent)}
+                    className="w-full bg-gray-900 text-white py-3 rounded-xl font-black active:scale-95 transition-all"
+                >
+                    确认导入
+                </button>
+            </div>
+        </div>
+      )}
     </div>
   );
 };
