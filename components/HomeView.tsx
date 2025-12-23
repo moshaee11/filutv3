@@ -2,10 +2,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
 import { 
-  PlusCircle, Wallet, FileText, Send, 
-  ChevronRight, Share2, Receipt, ArrowUpCircle, 
-  ArrowDownCircle, PackageCheck, ShoppingBag, X, Info, Search, UserCheck, Plus, CheckCircle2,
-  Truck, Store, Tag, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight
+  Wallet, Send, Share2, Receipt, ArrowUpCircle, 
+  ArrowDownCircle, X, Plus, CheckCircle2,
+  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight
 } from 'lucide-react';
 import { OrderStatus } from '../types';
 

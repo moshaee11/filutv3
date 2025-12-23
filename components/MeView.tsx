@@ -1,10 +1,10 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../store';
 import { 
   Database, Download, Upload, Trash2, ShieldCheck, 
-  Info, Share2, Copy, CheckCircle2, AlertTriangle, FileSpreadsheet,
-  History, ShieldAlert, ChevronRight, UserCircle2, ExternalLink, X, ClipboardCopy, ClipboardPaste, ArrowUpRight
+  Info, CheckCircle2, FileSpreadsheet,
+  ShieldAlert, UserCircle2, X, ClipboardCopy, ClipboardPaste, ArrowUpRight
 } from 'lucide-react';
 import { downloadJSON, downloadCSV, preciseCalc } from '../utils';
 
