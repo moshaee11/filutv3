@@ -319,7 +319,7 @@ const MeView: React.FC = () => {
                     <h3 className="text-lg font-black text-gray-800">粘贴恢复数据</h3>
                     <button onClick={() => setShowPasteModal(false)} className="p-1 bg-gray-100 rounded-full"><X size={20}/></button>
                 </div>
-                <p className="text-xs text-gray-400">请长按下方输入框 -> 粘贴：</p>
+                <p className="text-xs text-gray-400">请长按下方输入框 → 粘贴：</p>
                 <textarea 
                     value={pasteContent}
                     onChange={e => setPasteContent(e.target.value)}

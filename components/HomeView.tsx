@@ -149,7 +149,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
                     <h3 className="text-lg font-black text-gray-800">粘贴以同步数据</h3>
                     <button onClick={() => setShowSyncModal(false)} className="p-1 bg-gray-100 rounded-full"><X size={20}/></button>
                 </div>
-                <p className="text-xs text-gray-400">请长按下方输入框 -> 选择“粘贴”：</p>
+                <p className="text-xs text-gray-400">请长按下方输入框 → 选择“粘贴”：</p>
                 <textarea 
                     value={syncContent}
                     onChange={e => setSyncContent(e.target.value)}
