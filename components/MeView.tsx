@@ -2,16 +2,16 @@
 import React, { useState } from 'react';
 import { useApp } from '../store';
 import { 
-  Database, Download, Upload, Trash2, ShieldCheck, 
-  Info, CheckCircle2, FileSpreadsheet,
-  ShieldAlert, UserCircle2, X, ClipboardCopy, ClipboardPaste, ArrowUpRight
+  Database, Download, Upload, Trash2, 
+  CheckCircle2, FileSpreadsheet,
+  ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight
 } from 'lucide-react';
 import { downloadJSON, downloadCSV, preciseCalc } from '../utils';
 
 const MeView: React.FC = () => {
   const { data, exportData, importData } = useApp();
   const [lastBackup, setLastBackup] = useState<string>(localStorage.getItem('LAST_BACKUP_TIME') || '从未备份');
-  const [showWxTransferModal, setShowWxTransferModal] = useState(false); // 微信数据迁移弹窗
+  const [showWxTransferModal, setShowWxTransferModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [pasteContent, setPasteContent] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success'>('idle');
@@ -27,37 +27,40 @@ const MeView: React.FC = () => {
     setLastBackup(now);
   };
 
-  // 核心功能：打包数据到剪贴板
+  // 核心功能：打包数据到剪贴板 (兼容性增强版)
   const handleCopyDataToClipboard = async () => {
     const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
     const jsonStr = JSON.stringify(backupData);
     
     try {
+        // 优先尝试标准API
         await navigator.clipboard.writeText(jsonStr);
         setCopyStatus('success');
         updateBackupTime();
-        return true;
     } catch (err) {
-        // 兼容旧设备的降级方案
-        const textarea = document.createElement('textarea');
-        textarea.value = jsonStr;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        setCopyStatus('success');
-        updateBackupTime();
-        return true;
+        // 降级方案：创建一个隐藏的文本域并选定复制
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = jsonStr;
+            textarea.style.position = 'fixed'; // 防止滚动
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            setCopyStatus('success');
+            updateBackupTime();
+        } catch (e) {
+            alert('复制失败，请手动长按复制数据');
+        }
     }
   };
 
-  // 触发导出（Excel或JSON）时的拦截逻辑
   const handleExportClick = (type: 'excel' | 'json') => {
     if (isWeChat()) {
-        // 如果是微信，拦截并显示“搬家向导”
         setShowWxTransferModal(true);
-        // 尝试自动复制一次，提升体验
-        handleCopyDataToClipboard(); 
+        handleCopyDataToClipboard(); // 自动触发一次
         return;
     }
 
@@ -78,7 +81,6 @@ const MeView: React.FC = () => {
   const performExportExcel = () => {
     if (data.orders.length === 0) return alert('暂无订单数据可导出');
     
-    // 定义表头
     const headers = [
         '销售日期', '销售时间', '系统单号', '客户名称', '客户类型', 
         '应收总额(元)', '实收金额(元)', '本单欠款(元)', '额外杂费', '折扣优惠', 
@@ -109,7 +111,6 @@ const MeView: React.FC = () => {
       ];
     });
     
-    // 汇总行逻辑保持不变...
     const totalAmount = sortedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
     const totalReceived = sortedOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
     const totalDebt = sortedOrders.reduce((sum, o) => sum + (o.totalAmount - o.receivedAmount), 0);
@@ -139,7 +140,7 @@ const MeView: React.FC = () => {
   const performImport = (content: string) => {
     if (!content) return;
     try {
-        JSON.parse(content); // 预检查
+        JSON.parse(content); 
         if (confirm('⚠️ 警告：导入数据将完全覆盖当前所有数据！\n\n确定要继续吗？')) {
            try {
              const base64 = btoa(unescape(encodeURIComponent(content)));
@@ -196,7 +197,6 @@ const MeView: React.FC = () => {
                        <p className="text-[10px] text-gray-400 font-bold">上次备份: {lastBackup}</p>
                     </div>
                  </div>
-                 {/* 统一入口 */}
                  <button onClick={() => handleExportClick('json')} className="px-4 py-2 bg-gray-900 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
               </div>
               <div className="p-4 flex justify-between items-center">
@@ -230,7 +230,6 @@ const MeView: React.FC = () => {
                        <p className="text-[10px] text-gray-400 font-bold">包含所有销售明细与统计</p>
                     </div>
                  </div>
-                 {/* 统一入口 */}
                  <button onClick={() => handleExportClick('excel')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
               </div>
            </div>
@@ -254,7 +253,7 @@ const MeView: React.FC = () => {
         </div>
       </div>
 
-      {/* 微信数据迁移向导 (核心部分) */}
+      {/* 微信数据迁移向导 */}
       {showWxTransferModal && (
         <div className="fixed inset-0 z-[999] bg-black/90 flex flex-col text-white px-6 pt-12 animate-in fade-in">
              <div className="absolute top-4 right-6 animate-bounce">
