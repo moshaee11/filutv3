@@ -1,10 +1,11 @@
+
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../store';
 import { 
   Package, ArrowLeft, Truck, ChevronRight, X, Trash2, 
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
-  History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers
+  History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch } from '../types';
 
@@ -189,7 +190,7 @@ const ProductFormFields: React.FC<{
 );
 
 const ManageView: React.FC = () => {
-  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product';
+  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product';
   const [subView, setSubView] = useState<ViewState>('main');
   
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
@@ -208,8 +209,18 @@ const ManageView: React.FC = () => {
 
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
   const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '2.5' });
+  
+  // Inventory Adjustment State
+  const [adjustForm, setAdjustForm] = useState({ 
+    id: '', 
+    name: '', 
+    currentQty: 0, 
+    currentWeight: 0, 
+    actualQty: '', 
+    actualWeight: '' 
+  });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, addExtraFee, removeExtraFee, cancelOrder } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, cancelOrder } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -241,9 +252,7 @@ const ManageView: React.FC = () => {
 
   // --- SUB-VIEWS RENDER ---
   if (subView === 'history') {
-    // Filter orders:
-    // 1. Matches Search
-    // 2. If Batch selected, order MUST contain at least one item from that batch
+    // Filter orders... (Existing logic)
     const filteredOrders = data.orders.filter(o => {
       const matchesSearch = o.orderNo.includes(orderSearch) || o.customerName.includes(orderSearch);
       const matchesBatch = filterBatchId === 'ALL' 
@@ -317,18 +326,45 @@ const ManageView: React.FC = () => {
         searchProps={{ value: invSearch, onChange: setInvSearch, placeholder: "搜索品名..." }}
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: data.batches }}
       >
+        <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl text-xs font-bold mb-2 flex items-start gap-2">
+            <div className="shrink-0 mt-0.5"><AlertTriangle size={14}/></div>
+            <div>如遇烂果损耗、水分流失或试吃赠送，请点击“修正”按钮，输入实际剩余库存，系统将自动记录差额。</div>
+        </div>
+
         {filteredProducts.map(p => {
           const batch = data.batches.find(b => b.id === p.batchId);
           return (
-            <div key={p.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 grid grid-cols-3 items-center">
-              <div className="col-span-1">
-                <p className="font-black text-lg">{p.name}</p>
-                {filterBatchId === 'ALL' && batch && (
-                   <span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch.plateNumber}</span>
-                )}
+            <div key={p.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 relative group">
+              <div className="grid grid-cols-3 items-center mb-1">
+                <div className="col-span-1">
+                    <p className="font-black text-lg">{p.name}</p>
+                    {filterBatchId === 'ALL' && batch && (
+                    <span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch.plateNumber}</span>
+                    )}
+                </div>
+                <p className="text-center"><span className="font-bold text-xl">{p.stockQty}</span><span className="text-xs text-gray-400"> 件</span></p>
+                <p className="text-center"><span className="font-bold text-xl">{p.stockWeight.toFixed(1)}</span><span className="text-xs text-gray-400"> 斤</span></p>
               </div>
-              <p className="text-center"><span className="font-bold text-xl">{p.stockQty}</span><span className="text-xs text-gray-400"> 件</span></p>
-              <p className="text-center"><span className="font-bold text-xl">{p.stockWeight.toFixed(1)}</span><span className="text-xs text-gray-400"> 斤</span></p>
+
+              {/* Action Bar */}
+              <div className="mt-4 pt-3 border-t border-dashed border-gray-100 flex justify-end">
+                <button 
+                  onClick={() => {
+                    setAdjustForm({
+                        id: p.id,
+                        name: p.name,
+                        currentQty: p.stockQty,
+                        currentWeight: p.stockWeight,
+                        actualQty: '',
+                        actualWeight: ''
+                    });
+                    setSubView('adjust_stock');
+                  }}
+                  className="bg-gray-100 text-gray-600 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 active:scale-95 transition-all hover:bg-emerald-50 hover:text-emerald-600"
+                >
+                    <ClipboardEdit size={14} /> 修正/损耗
+                </button>
+              </div>
             </div>
           );
         })}
@@ -337,13 +373,89 @@ const ManageView: React.FC = () => {
     );
   }
 
+  // 新增：库存修正弹窗视图
+  if (subView === 'adjust_stock') {
+    const diffQty = adjustForm.actualQty ? parseInt(adjustForm.actualQty) - adjustForm.currentQty : 0;
+    const diffWeight = adjustForm.actualWeight ? parseFloat(adjustForm.actualWeight) - adjustForm.currentWeight : 0;
+    
+    return (
+        <FormModal 
+            title="库存盘点修正" 
+            onBack={() => setSubView('inventory')} 
+            onSave={() => {
+                if (!adjustForm.actualQty && !adjustForm.actualWeight) return;
+                const newQty = adjustForm.actualQty ? parseInt(adjustForm.actualQty) : adjustForm.currentQty;
+                const newWeight = adjustForm.actualWeight ? parseFloat(adjustForm.actualWeight) : adjustForm.currentWeight;
+                adjustStock(adjustForm.id, newQty, newWeight);
+                setSubView('inventory');
+            }}
+        >
+            <div className="space-y-6">
+                <div className="bg-gray-100 p-5 rounded-3xl text-center space-y-1">
+                    <p className="text-gray-400 text-xs font-black uppercase tracking-widest">正在修正</p>
+                    <p className="text-2xl font-black text-gray-800">{adjustForm.name}</p>
+                    <p className="text-xs text-gray-500 font-bold">系统账面：{adjustForm.currentQty}件 / {adjustForm.currentWeight.toFixed(1)}斤</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-black text-blue-500 uppercase px-2">实盘件数</label>
+                        <input 
+                            type="number"
+                            autoFocus
+                            placeholder={adjustForm.currentQty.toString()}
+                            value={adjustForm.actualQty}
+                            onChange={e => setAdjustForm({...adjustForm, actualQty: e.target.value})}
+                            className="w-full bg-white border-2 border-gray-100 p-4 rounded-2xl font-black text-2xl text-center outline-none focus:border-blue-500 transition-all"
+                        />
+                         {adjustForm.actualQty && diffQty !== 0 && (
+                            <p className={`text-center text-xs font-black ${diffQty < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                                {diffQty > 0 ? '+' : ''}{diffQty} 件
+                            </p>
+                        )}
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-xs font-black text-blue-500 uppercase px-2">实盘重量 (斤)</label>
+                        <input 
+                            type="number"
+                            placeholder={adjustForm.currentWeight.toString()}
+                            value={adjustForm.actualWeight}
+                            onChange={e => setAdjustForm({...adjustForm, actualWeight: e.target.value})}
+                            className="w-full bg-white border-2 border-gray-100 p-4 rounded-2xl font-black text-2xl text-center outline-none focus:border-blue-500 transition-all"
+                        />
+                         {adjustForm.actualWeight && diffWeight !== 0 && (
+                            <p className={`text-center text-xs font-black ${diffWeight < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                                {diffWeight > 0 ? '+' : ''}{diffWeight.toFixed(1)} 斤
+                            </p>
+                        )}
+                    </div>
+                </div>
+
+                {(diffQty < 0 || diffWeight < 0) && (
+                    <div className="bg-red-50 p-4 rounded-2xl flex items-center gap-3 text-red-600 animate-in fade-in">
+                        <TrendingUp className="rotate-180" size={20} />
+                        <div>
+                            <p className="text-xs font-black uppercase">检测到库存损耗</p>
+                            <p className="text-xs opacity-80">系统将自动扣减，不计入销售收入。</p>
+                        </div>
+                    </div>
+                )}
+                 {(diffQty > 0 || diffWeight > 0) && (
+                    <div className="bg-emerald-50 p-4 rounded-2xl flex items-center gap-3 text-emerald-600 animate-in fade-in">
+                        <TrendingUp size={20} />
+                        <div>
+                            <p className="text-xs font-black uppercase">检测到库存盘盈</p>
+                            <p className="text-xs opacity-80">多余库存将录入系统。</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </FormModal>
+    );
+  }
+
   if (subView === 'customers') {
     // Advanced Logic for Batch-Specific Accounts Receivable
-    // If 'ALL': Show Total Debt.
-    // If 'Batch': Show Total Sales of that Batch to that Customer (Not exactly debt, but "Business Volume" for that batch). 
-    // Calculating "Debt per batch" is mathematically ambiguous in a pool-based debt system. 
-    // So we show "Purchase Amount" from this batch.
-
     const customerDisplayList = data.customers
       .filter(c => !c.isGuest && c.name.includes(custSearch))
       .map(c => {
@@ -388,6 +500,7 @@ const ManageView: React.FC = () => {
     );
   }
   
+  // ... (reconcile logic unchanged) ...
   if (subView === 'reconcile') {
     // Reconcile Logic
     // ALL: Store Global View

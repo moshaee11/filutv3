@@ -7,6 +7,7 @@ interface AppContextType {
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
+  adjustStock: (productId: string, newQty: number, newWeight: number) => void; // 新增方法
   addOrder: (o: Order) => void;
   cancelOrder: (id: string) => void;
   deleteOrder: (id: string) => void;
@@ -56,6 +57,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateProduct = (p: Product) => setData(prev => ({ ...prev, products: prev.products.map(old => old.id === p.id ? p : old) }));
   const deleteProduct = (id: string) => setData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
   
+  // 新增：库存修正逻辑
+  const adjustStock = (productId: string, newQty: number, newWeight: number) => {
+    setData(prev => ({
+      ...prev,
+      products: prev.products.map(p => 
+        p.id === productId ? { ...p, stockQty: newQty, stockWeight: newWeight } : p
+      )
+    }));
+  };
+
   const addBatch = (b: Batch) => setData(prev => ({ ...prev, batches: [b, ...prev.batches] }));
   const updateBatch = (b: Batch) => setData(prev => ({ ...prev, batches: prev.batches.map(old => old.id === b.id ? b : old) }));
   
@@ -155,7 +166,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{ 
-      data, addProduct, updateProduct, deleteProduct, addOrder, cancelOrder, deleteOrder, 
+      data, addProduct, updateProduct, deleteProduct, adjustStock, addOrder, cancelOrder, deleteOrder, 
       addBatch, updateBatch, closeBatch, deleteBatch, addExtraFee, removeExtraFee, 
       addPayee, updatePayee, deletePayee, addCustomer, addRepayment, addExpense,
       importData, exportData 

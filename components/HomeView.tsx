@@ -4,7 +4,7 @@ import { useApp } from '../store';
 import { 
   Wallet, Send, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, X, Plus, CheckCircle2,
-  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight
+  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight, Copy, Share
 } from 'lucide-react';
 import { OrderStatus } from '../types';
 
@@ -20,23 +20,41 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncContent, setSyncContent] = useState('');
 
+  const isEmptyData = data.orders.length === 0 && data.products.length === 0 && data.batches.length === 0;
+
   useEffect(() => {
     const checkBackupStatus = () => {
+        if (isEmptyData) return;
+
         const lastBackupStr = localStorage.getItem('LAST_BACKUP_TIME');
-        const isNeeded = !lastBackupStr || (Date.now() - new Date(lastBackupStr).getTime() > 3 * 24 * 60 * 60 * 1000);
+        const now = new Date();
+        const todayStr = now.toDateString(); 
+
+        let isNeeded = false;
+
+        if (!lastBackupStr) {
+            isNeeded = true;
+        } else {
+            const lastBackupDate = new Date(lastBackupStr).toDateString();
+            if (lastBackupDate !== todayStr) {
+                isNeeded = true;
+            }
+        }
+        
         setNeedsBackup(isNeeded);
 
         if (isNeeded) {
-            const todayStr = new Date().toISOString().split('T')[0];
             const lastPromptDate = localStorage.getItem('HOME_BACKUP_PROMPT_DATE');
-            if (lastPromptDate !== todayStr) {
+            const todayPromptKey = now.toISOString().split('T')[0];
+
+            if (lastPromptDate !== todayPromptKey) {
                 setShowBackupAlert(true);
-                localStorage.setItem('HOME_BACKUP_PROMPT_DATE', todayStr);
+                localStorage.setItem('HOME_BACKUP_PROMPT_DATE', todayPromptKey);
             }
         }
     };
     checkBackupStatus();
-  }, []);
+  }, [isEmptyData]);
 
   const totalDebtAmount = useMemo(() => 
     data.customers.reduce((sum, c) => sum + (c.totalDebt || 0), 0)
@@ -67,7 +85,38 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
       }
   };
 
-  const isEmptyData = data.orders.length === 0 && data.products.length === 0 && data.batches.length === 0;
+  // 纯净版备份：仅复制
+  const handleSmartBackup = async () => {
+    const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
+    const nowStr = new Date().toLocaleString();
+    const jsonStr = JSON.stringify(backupData);
+
+    try {
+        await navigator.clipboard.writeText(jsonStr);
+        localStorage.setItem('LAST_BACKUP_TIME', nowStr);
+        setNeedsBackup(false);
+        setShowBackupAlert(false);
+        alert('✅ 数据已复制！\n\n请立即去微信群 -> 粘贴 -> 发送。\n完成今日数据存档。');
+    } catch (err) {
+        // 兼容性回退
+        const textarea = document.createElement('textarea');
+        textarea.value = jsonStr;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            localStorage.setItem('LAST_BACKUP_TIME', nowStr);
+            setNeedsBackup(false);
+            setShowBackupAlert(false);
+            alert('✅ 数据已复制！\n\n请立即去微信群 -> 粘贴 -> 发送。');
+        } catch (e) {
+            alert('❌ 自动备份失败，请前往“我的”页面手动导出。');
+        }
+        document.body.removeChild(textarea);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#F4F7FA] pb-32">
@@ -77,9 +126,9 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
           <div className="space-y-1">
             <h2 className="text-2xl font-black tracking-tight flex items-center gap-2">砂糖橘批发助手 Pro</h2>
             {needsBackup && !isEmptyData && (
-                <div className="inline-flex items-center gap-1 bg-white px-2 py-0.5 rounded-md mt-1 shadow-sm animate-pulse">
-                    <AlertTriangle size={10} className="text-red-500" fill="currentColor" />
-                    <span className="text-[10px] font-black text-red-500">建议立即备份数据</span>
+                <div onClick={() => setShowBackupAlert(true)} className="inline-flex items-center gap-1 bg-red-500/20 border border-red-500/30 px-2 py-0.5 rounded-md mt-1 shadow-sm animate-pulse cursor-pointer">
+                    <AlertTriangle size={10} className="text-white" fill="currentColor" />
+                    <span className="text-[10px] font-black text-white">今日未备份，点击备份</span>
                 </div>
             )}
           </div>
@@ -92,7 +141,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
       </div>
 
       <div className="px-4 -mt-8 relative z-10 space-y-4">
-        {/* 数据同步引导卡片：更明确的引导文案 */}
+        {/* 数据同步引导卡片 */}
         {isEmptyData && (
             <div className="bg-gray-900 rounded-[2rem] p-6 shadow-xl text-white flex flex-col gap-4 animate-in slide-in-from-top-4 border border-gray-700">
                 <div className="flex justify-between items-start">
@@ -169,16 +218,28 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
 
       {/* 每日首次打开时的备份提醒弹窗 (非空数据时) */}
       {showBackupAlert && !isEmptyData && (
-        <div className="fixed inset-0 z-[400] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
-            <div className="bg-white w-full max-w-xs rounded-[2rem] p-6 space-y-4 shadow-2xl animate-in zoom-in-95 text-center">
-                <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto">
-                    <ShieldAlert size={32} />
+        <div className="fixed inset-0 z-[400] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+            <div className="bg-white w-full max-w-xs rounded-[2rem] p-6 space-y-6 shadow-2xl animate-in zoom-in-95 text-center">
+                <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                    <ShieldAlert size={40} />
                 </div>
-                <div className="space-y-2">
-                    <h3 className="text-xl font-black text-gray-800">数据安全提醒</h3>
-                    <p className="text-sm text-gray-500 font-bold leading-relaxed">检测到您长时间未备份数据，为了您的资产安全，建议前往“我的”页面导出备份。</p>
+                <div className="space-y-3">
+                    <h3 className="text-2xl font-black text-gray-800">📅 每日数据打卡</h3>
+                    <p className="text-sm text-gray-500 font-bold leading-relaxed px-2">
+                        为防手机丢失导致<span className="text-red-500">账本丢失</span>，建议每天备份到云盘或微信。
+                    </p>
                 </div>
-                <button onClick={() => setShowBackupAlert(false)} className="w-full bg-gray-900 text-white py-3.5 rounded-2xl font-black shadow-lg active:scale-95 transition-all">我知道了</button>
+                
+                <button 
+                    onClick={handleSmartBackup} 
+                    className="w-full bg-emerald-500 text-white py-4 rounded-2xl font-black text-lg shadow-xl shadow-emerald-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+                >
+                    <Copy size={20} strokeWidth={3} /> 一键复制备份
+                </button>
+                
+                <button onClick={() => setShowBackupAlert(false)} className="text-gray-400 text-xs font-bold py-2">
+                    今天不再提醒
+                </button>
             </div>
         </div>
       )}
@@ -186,7 +247,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
   );
 };
 
-// QuickModal 组件保持不变，省略以节省空间...
+// QuickModal 组件保持不变
 const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void }> = ({ type, onClose }) => {
   const { data, addRepayment, addExpense, addCustomer } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');
@@ -194,13 +255,11 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   
-  // Expense specific state
   const [expenseScope, setExpenseScope] = useState<'DAILY' | 'BATCH'>('DAILY');
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   
   const activeBatches = useMemo(() => data.batches.filter(b => !b.isClosed), [data.batches]);
 
-  // Set default batch if available when switching to BATCH mode
   React.useEffect(() => {
     if (expenseScope === 'BATCH' && activeBatches.length > 0 && !selectedBatchId) {
       setSelectedBatchId(activeBatches[0].id);
@@ -262,13 +321,11 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   if (type === 'repayment') {
     return (
       <div className="fixed inset-0 z-[200] bg-[#F1F3F6] flex flex-col animate-in slide-in-from-right">
-        {/* 顶部标题栏 */}
         <header className="bg-white px-4 py-4 flex items-center shrink-0 border-b border-gray-100 shadow-sm z-10">
           <button onClick={onClose} className="text-[#3b82f6] text-base font-bold active:scale-95 transition-all">返回</button>
           <h1 className="flex-1 text-center font-black text-lg text-[#1f2937] pr-8">欠款/客户管理</h1>
         </header>
 
-        {/* 搜索栏 */}
         <div className="px-4 pt-4 pb-2 flex gap-3 shrink-0">
            <div className="flex-1 relative bg-white rounded-xl shadow-sm overflow-hidden">
              <input 
@@ -286,7 +343,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
            </button>
         </div>
 
-        {/* 列表区域 */}
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3 no-scrollbar pb-32">
            {customerList.map(c => (
              <div key={c.id} className="bg-white p-5 rounded-[1.2rem] flex justify-between items-center shadow-sm border border-gray-50 active:scale-[0.99] transition-all">
@@ -313,7 +369,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
            )}
         </div>
 
-        {/* 新增客户弹窗 */}
         {showAddCustomer && (
             <div className="fixed inset-0 z-[300] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
                 <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 space-y-6 shadow-2xl animate-in zoom-in-95">
@@ -339,7 +394,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
     );
   }
 
-  // 支出登记弹窗
   return (
     <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-end">
        <div className="bg-white w-full rounded-t-[3rem] p-8 space-y-6 animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto no-scrollbar shadow-2xl">
@@ -349,7 +403,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
           </div>
 
           <div className="space-y-6">
-             {/* 归属类型选择 */}
              <div className="bg-gray-100 p-1.5 rounded-2xl flex">
                 <button 
                   onClick={() => setExpenseScope('DAILY')}
@@ -365,7 +418,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                 </button>
              </div>
 
-             {/* 车次选择 (仅跟车成本显示) */}
              {expenseScope === 'BATCH' && (
                 <div className="animate-in fade-in slide-in-from-top-2 space-y-2">
                    <label className="text-xs text-gray-400 font-black uppercase tracking-widest px-2">关联车次 (计入该车成本)</label>
@@ -398,7 +450,6 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                     placeholder="例如：伙食费"
                     className="w-full bg-gray-50 p-5 rounded-2xl font-black outline-none shadow-inner border-2 border-transparent focus:border-emerald-100 focus:bg-white transition-all" 
                   />
-                  {/* 快捷标签 */}
                   <div className="flex gap-2 px-1">
                     {(expenseScope === 'BATCH' ? ['劳务费', '板车费', '过磅费', '运费'] : ['员工伙食', '店铺水电', '设备维修', '包装耗材']).map(tag => (
                        <button 
