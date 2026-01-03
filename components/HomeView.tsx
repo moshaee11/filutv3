@@ -65,9 +65,15 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
     const startOfToday = new Date(now.setHours(0,0,0,0)).getTime();
     const orders = data.orders.filter(o => o.status === OrderStatus.ACTIVE && new Date(o.createdAt).getTime() >= startOfToday);
     const repayments = data.repayments.filter(r => new Date(r.date).getTime() >= startOfToday);
-    const orderAmount = orders.reduce((sum, o) => sum + o.totalAmount, 0);
+    
+    // 修正：营收总额应该是 (总额 - 优惠/抹零)。
+    // 之前是 sum(o.totalAmount)，导致抹零金额也被算作“营收”
+    const orderAmount = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
     const receivedAmount = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    
+    // 欠款增加量 = 实际成交价 - 实收
     const debtAmount = orderAmount - receivedAmount;
+    
     const activeBatches = data.batches.filter(b => !b.isClosed).length;
     return { orderAmount, receivedAmount, debtAmount, activeBatches };
   }, [data]);
@@ -182,7 +188,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
       <div className="p-4 space-y-4">
         <div className="flex justify-between items-center px-2"><h3 className="font-black text-lg text-gray-800 tracking-tight">今日经营动态</h3></div>
         <div className="grid grid-cols-2 gap-3">
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日营收</p><p className="text-2xl font-black text-gray-900">¥{stats.orderAmount.toLocaleString()}</p></div>
+           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日营收 (实成交)</p><p className="text-2xl font-black text-gray-900">¥{stats.orderAmount.toLocaleString()}</p></div>
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日实收</p><p className="text-2xl font-black text-emerald-500">¥{stats.receivedAmount.toLocaleString()}</p></div>
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">新增挂账</p><p className="text-2xl font-black text-red-500">¥{stats.debtAmount.toLocaleString()}</p></div>
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">在售车辆</p><p className="text-2xl font-black text-blue-500">{stats.activeBatches} 台</p></div>

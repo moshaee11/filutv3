@@ -99,7 +99,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (item) return { ...p, stockQty: p.stockQty - item.qty, stockWeight: p.stockWeight - item.netWeight };
         return p;
       });
-      const debt = Math.max(0, order.totalAmount - order.receivedAmount);
+      // 修正逻辑：欠款 = 总额(含杂费) - 优惠 - 实收
+      const debt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
       const updatedCustomers = prev.customers.map(c => c.id === order.customerId ? { ...c, totalDebt: c.totalDebt + debt } : c);
       return { ...prev, products: updatedProducts, orders: [order, ...prev.orders], customers: updatedCustomers };
     });
@@ -117,8 +118,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      // 2. 减去客户欠款
-      const debt = Math.max(0, order.totalAmount - order.receivedAmount);
+      // 2. 减去客户欠款 (对应 addOrder 中的增加逻辑)
+      const debt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
       const updatedCustomers = prev.customers.map(c => c.id === order.customerId ? { ...c, totalDebt: Math.max(0, c.totalDebt - debt) } : c);
 
       // 3. 更新单据状态为 CANCELLED
@@ -129,7 +130,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteOrder = (orderId: string) => {
-    setData(prev => ({ ...prev, orders: prev.orders.filter(o => o.id !== orderId) }));
+    setData(prev => {
+      const order = prev.orders.find(o => o.id === orderId);
+      if (!order) return prev;
+
+      let updatedProducts = prev.products;
+      let updatedCustomers = prev.customers;
+
+      // 如果订单是有效的（未作废），则需要回退数据
+      if (order.status === OrderStatus.ACTIVE) {
+         // 1. 回退库存
+         updatedProducts = prev.products.map(p => {
+            const item = order.items.find(i => i.productId === p.id);
+            if (item) {
+                return { 
+                    ...p, 
+                    stockQty: p.stockQty + item.qty, 
+                    stockWeight: p.stockWeight + item.netWeight 
+                };
+            }
+            return p;
+         });
+
+         // 2. 回退欠款 (如果有)
+         // 计算产生的欠款金额
+         const addedDebt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
+         if (addedDebt > 0) {
+             updatedCustomers = prev.customers.map(c => 
+                 c.id === order.customerId 
+                     ? { ...c, totalDebt: Math.max(0, c.totalDebt - addedDebt) } 
+                     : c
+             );
+         }
+      }
+
+      // 3. 彻底删除订单
+      const updatedOrders = prev.orders.filter(o => o.id !== orderId);
+
+      return { 
+        ...prev, 
+        products: updatedProducts, 
+        orders: updatedOrders, 
+        customers: updatedCustomers 
+      };
+    });
   };
 
   const addRepayment = (r: Repayment) => {

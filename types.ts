@@ -33,6 +33,7 @@ export interface Product {
   batchId?: string;
   costPrice?: number;
   sellingPrice?: number;
+  lowStockThreshold?: number; // 新增：库存预警阈值
 }
 
 export interface Batch {

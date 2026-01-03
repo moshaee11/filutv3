@@ -1,11 +1,11 @@
-
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../store';
 import { 
   Package, ArrowLeft, Truck, ChevronRight, X, Trash2, 
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
-  History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw
+  History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
+  Plus, PlusCircle
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch } from '../types';
 
@@ -22,8 +22,9 @@ const SubViewShell: React.FC<{
   onBack: () => void; 
   children: React.ReactNode; 
   searchProps?: { value: string; onChange: (s: string) => void; placeholder: string };
-  batchSelectorProps?: BatchSelectorProps; // New Prop for Batch Filtering
-}> = ({ title, onBack, children, searchProps, batchSelectorProps }) => (
+  batchSelectorProps?: BatchSelectorProps; 
+  disableScroll?: boolean;
+}> = ({ title, onBack, children, searchProps, batchSelectorProps, disableScroll = false }) => (
   <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
     <header className="bg-white px-4 py-4 border-b flex items-center shrink-0 shadow-sm z-10">
       <button onClick={onBack} className="p-2 -ml-2 active:scale-90"><ArrowLeft /></button>
@@ -59,7 +60,7 @@ const SubViewShell: React.FC<{
             <button
               key={batch.id}
               onClick={() => batchSelectorProps.onSelectBatch(batch.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all shrink-0 border ${batchSelectorProps.selectedBatchId === batch.id ? 'bg-emerald-500 border-emerald-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-500'}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all shrink-0 border ${batchSelectorProps.selectedBatchId === batch.id ? 'bg-emerald-50 border-emerald-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-500'}`}
             >
               <Truck size={12} /> {batch.plateNumber}
             </button>
@@ -68,7 +69,7 @@ const SubViewShell: React.FC<{
       )}
     </div>
 
-    <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-32 no-scrollbar">
+    <div className={`flex-1 ${disableScroll ? 'overflow-hidden' : 'p-4 pb-32 overflow-y-auto no-scrollbar space-y-3'}`}>
       {children}
     </div>
   </div>
@@ -122,8 +123,8 @@ const BatchFormFields: React.FC<{
 );
 
 const ProductFormFields: React.FC<{
-  productForm: { name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string };
-  setProductForm: React.Dispatch<React.SetStateAction<{ name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string }>>;
+  productForm: { name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string };
+  setProductForm: React.Dispatch<React.SetStateAction<{ name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string }>>;
 }> = ({ productForm, setProductForm }) => (
   <div className="space-y-5"> 
     <div>
@@ -174,18 +175,32 @@ const ProductFormFields: React.FC<{
         />
       </div>
     </div>
-    {productForm.mode === PricingMode.WEIGHT && (
-      <div className="animate-in fade-in">
-        <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">默认皮重 (斤/件)</label>
+    
+    <div className="grid grid-cols-2 gap-4">
+      {productForm.mode === PricingMode.WEIGHT ? (
+        <div className="animate-in fade-in">
+          <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">默认皮重 (斤/件)</label>
+          <input 
+            value={productForm.tare} 
+            onChange={e => setProductForm({...productForm, tare: e.target.value})} 
+            type="number"
+            placeholder="0.0"
+            className="w-full mt-1 bg-gray-100 p-5 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all text-center" 
+          />
+        </div>
+      ) : <div />}
+      
+      <div>
+        <label className="text-xs font-bold text-red-400 uppercase tracking-wider px-1">预警件数 (低于变红)</label>
         <input 
-          value={productForm.tare} 
-          onChange={e => setProductForm({...productForm, tare: e.target.value})} 
+          value={productForm.threshold} 
+          onChange={e => setProductForm({...productForm, threshold: e.target.value})} 
           type="number"
-          placeholder="0.0"
-          className="w-full mt-1 bg-gray-100 p-5 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all" 
+          placeholder="20"
+          className="w-full mt-1 bg-red-50 p-5 rounded-2xl font-bold text-lg text-red-500 border-2 border-transparent focus:border-red-400 focus:bg-white outline-none transition-all text-center placeholder-red-200" 
         />
       </div>
-    )}
+    </div>
   </div>
 );
 
@@ -208,8 +223,12 @@ const ManageView: React.FC = () => {
   const [feeForm, setFeeForm] = useState({ name: '运费', amount: '' });
 
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
-  const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0' });
+  const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' });
   
+  // Reconcile States
+  const [reconcileDate, setReconcileDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [reconcileBatchId, setReconcileBatchId] = useState('ALL');
+
   // Inventory Adjustment State
   const [adjustForm, setAdjustForm] = useState({ 
     id: '', 
@@ -220,7 +239,7 @@ const ManageView: React.FC = () => {
     actualWeight: '' 
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, cancelOrder } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -229,434 +248,565 @@ const ManageView: React.FC = () => {
   const activeBatches = useMemo(() => data.batches.filter(b => !b.isClosed), [data.batches]);
   
   // Helper to find which batch a product belongs to
-  const getProductBatchId = (productId: string) => data.products.find(p => p.id === productId)?.batchId;
+  const getProductBatchId = (productId: string) => {
+    return data.products.find(p => p.id === productId)?.batchId;
+  };
+  
+  // --- SUBMIT HANDLERS ---
+  const handleSaveBatch = () => {
+    if (!batchForm.plate) return alert('请输入车牌号');
+    const newBatch: Batch = {
+      id: subView === 'edit_batch' && selectedBatchId ? selectedBatchId : Date.now().toString(),
+      plateNumber: batchForm.plate,
+      inboundDate: selectedBatch ? selectedBatch.inboundDate : new Date().toISOString(),
+      cost: parseFloat(batchForm.cost) || 0,
+      totalWeight: parseFloat(batchForm.weight) || 0,
+      extraFees: selectedBatch ? selectedBatch.extraFees : [],
+      isClosed: false,
+      batchNo: selectedBatch ? selectedBatch.batchNo : data.batches.length + 1
+    };
+    if (subView === 'edit_batch') updateBatch(newBatch);
+    else addBatch(newBatch);
+    setSubView('main');
+  };
 
-  // Analysis for specific batch detail view
-  const productPerformance = useMemo(() => {
-    if (!selectedBatchId) return [];
-    return data.products.filter(p => p.batchId === selectedBatchId).map(p => {
-      let soldQty = 0; let salesAmount = 0;
-      data.orders.filter(o => o.status === OrderStatus.ACTIVE).forEach(order => {
-        order.items.forEach(item => { if (item.productId === p.id) { soldQty += item.qty; salesAmount += item.subtotal; } });
-      });
-      return { ...p, soldQty, salesAmount };
+  const handleSaveProduct = () => {
+    if (!productForm.name) return alert('请输入商品名称');
+    if (!selectedBatchId) return alert('未选择车次');
+    const newProduct: Product = {
+      id: subView === 'edit_product' && selectedProductId ? selectedProductId : Date.now().toString(),
+      name: productForm.name,
+      category: productForm.category,
+      pricingMode: productForm.mode,
+      sellingPrice: parseFloat(productForm.sell) || 0,
+      stockQty: parseFloat(productForm.stock) || 0,
+      stockWeight: productForm.mode === PricingMode.WEIGHT ? (parseFloat(productForm.stock) * 20) : 0, // Initial estimate
+      defaultTare: parseFloat(productForm.tare) || 0,
+      batchId: selectedBatchId,
+      lowStockThreshold: parseFloat(productForm.threshold) || 20
+    };
+    if (subView === 'edit_product') updateProduct(newProduct);
+    else addProduct(newProduct);
+    setSubView('batch_detail');
+  };
+
+  const handleAdjustStock = () => {
+    const qty = parseFloat(adjustForm.actualQty);
+    const weight = parseFloat(adjustForm.actualWeight);
+    if (isNaN(qty)) return alert('请输入实际库存件数');
+    
+    // 如果是计重，必须输入重量
+    const product = data.products.find(p => p.id === adjustForm.id);
+    if (product?.pricingMode === PricingMode.WEIGHT && isNaN(weight)) {
+         return alert('请输入实际总重量');
+    }
+
+    adjustStock(adjustForm.id, qty, isNaN(weight) ? 0 : weight);
+    setSubView('inventory');
+  };
+
+  const handleAddFee = () => {
+    if (!feeForm.amount || !selectedBatchId) return;
+    addExtraFee(selectedBatchId, { id: Date.now().toString(), name: feeForm.name, amount: parseFloat(feeForm.amount) });
+    setShowFeeModal(false);
+    setFeeForm({ name: '运费', amount: '' });
+  };
+
+  // --- MEMOIZED FILTERED LISTS ---
+  const filteredOrders = useMemo(() => {
+    return data.orders
+      .filter(o => {
+         const matchSearch = o.orderNo.includes(orderSearch) || o.customerName.includes(orderSearch);
+         const matchBatch = filterBatchId === 'ALL' || o.items.some(i => getProductBatchId(i.productId) === filterBatchId);
+         return matchSearch && matchBatch;
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [data.orders, orderSearch, filterBatchId, data.products]);
+
+  const filteredInventory = useMemo(() => {
+    return data.products.filter(p => {
+        const matchSearch = p.name.includes(invSearch);
+        const matchBatch = filterBatchId === 'ALL' || p.batchId === filterBatchId;
+        return matchSearch && matchBatch;
     });
-  }, [selectedBatchId, data.products, data.orders]);
+  }, [data.products, invSearch, filterBatchId]);
 
-  const batchAnalysis = useMemo(() => {
-    if (!selectedBatch) return null;
-    const totalSales = productPerformance.reduce((s, p) => s + p.salesAmount, 0);
-    const totalCost = selectedBatch.cost + selectedBatch.extraFees.reduce((s, f) => s + f.amount, 0);
-    return { totalSales, totalCost, profit: totalSales - totalCost, progress: totalCost > 0 ? Math.min(100, (totalSales/totalCost)*100) : 0 };
-  }, [selectedBatch, productPerformance]);
 
-  // --- SUB-VIEWS RENDER ---
+  // --- VIEW RENDERERS ---
+  
+  // 1. Main Dashboard
+  if (subView === 'main') {
+    return (
+      <div className="p-4 space-y-6 pb-32">
+        <header className="py-4"><h1 className="text-2xl font-black text-gray-800">店铺管理</h1></header>
+        
+        <div className="grid grid-cols-2 gap-4">
+           <div onClick={() => setSubView('history')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
+              <div className="w-12 h-12 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3"><History size={24} /></div>
+              <p className="font-black text-gray-800">单据查询</p>
+              <p className="text-xs text-gray-400 font-bold mt-1">查看所有历史订单</p>
+           </div>
+           {/* Reconcile and Customers Views restored here */}
+           <div onClick={() => setSubView('reconcile')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
+              <div className="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center mb-3"><Wallet size={24} /></div>
+              <p className="font-black text-gray-800">财务核对</p>
+              <p className="text-xs text-gray-400 font-bold mt-1">收支对账 / 分车次</p>
+           </div>
+           <div onClick={() => setSubView('customers')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
+              <div className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mb-3"><Users size={24} /></div>
+              <p className="font-black text-gray-800">应收账款</p>
+              <p className="text-xs text-gray-400 font-bold mt-1">客户欠款总览</p>
+           </div>
+           <div onClick={() => setSubView('inventory')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
+              <div className="w-12 h-12 bg-purple-50 text-purple-500 rounded-2xl flex items-center justify-center mb-3"><ClipboardCheck size={24} /></div>
+              <p className="font-black text-gray-800">库存盘点</p>
+              <p className="text-xs text-gray-400 font-bold mt-1">修正库存 / 报损</p>
+           </div>
+        </div>
+
+        <div className="space-y-4">
+           <div className="flex justify-between items-center px-2">
+              <h3 className="font-black text-lg text-gray-800">车次/批次管理</h3>
+              <button onClick={() => { setBatchForm({plate:'', cost:'', weight:''}); setSubView('add_batch'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black bg-emerald-50 px-3 py-1.5 rounded-full"><Plus size={14}/> 新车入库</button>
+           </div>
+           
+           {activeBatches.map(batch => (
+              <div key={batch.id} onClick={() => { setSelectedBatchId(batch.id); setSubView('batch_detail'); }} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 active:scale-[0.98] transition-all flex justify-between items-center">
+                 <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-500"><Truck size={24} /></div>
+                    <div>
+                       <p className="font-black text-gray-800 text-lg">{batch.plateNumber}</p>
+                       <p className="text-xs text-gray-400 font-bold">{new Date(batch.inboundDate).toLocaleDateString()} 入库</p>
+                    </div>
+                 </div>
+                 <ChevronRight className="text-gray-300" />
+              </div>
+           ))}
+           
+           <div onClick={() => alert('请在已结束的车次中查看（功能开发中）')} className="bg-gray-50 p-4 rounded-[2rem] text-center text-gray-400 font-bold text-xs">
+              查看已结清的历史车次
+           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Add/Edit Batch Modal
+  if (subView === 'add_batch' || subView === 'edit_batch') {
+    return (
+      <FormModal title={subView === 'add_batch' ? '新车登记' : '修改信息'} onBack={() => setSubView(selectedBatchId ? 'batch_detail' : 'main')} onSave={handleSaveBatch}>
+        <BatchFormFields batchForm={batchForm} setBatchForm={setBatchForm} />
+      </FormModal>
+    );
+  }
+
+  // 3. Batch Detail View
+  if (subView === 'batch_detail' && selectedBatch) {
+    const products = data.products.filter(p => p.batchId === selectedBatchId);
+    return (
+       <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
+          <header className="bg-[#2D3142] text-white p-6 pb-12 rounded-b-[2.5rem] shadow-xl shrink-0">
+             <div className="flex justify-between items-start mb-6">
+                <button onClick={() => setSubView('main')} className="bg-white/10 p-2 rounded-full"><ArrowLeft size={20} /></button>
+                <div className="flex gap-2">
+                   <button onClick={() => { setBatchForm({ plate: selectedBatch.plateNumber, cost: selectedBatch.cost.toString(), weight: selectedBatch.totalWeight.toString() }); setSubView('edit_batch'); }} className="bg-white/10 p-2 rounded-full"><Edit2 size={20} /></button>
+                </div>
+             </div>
+             <div>
+                <p className="text-xs text-gray-400 font-black uppercase tracking-widest mb-1">当前车次</p>
+                <h1 className="text-4xl font-black tracking-tighter mb-4">{selectedBatch.plateNumber}</h1>
+                <div className="flex gap-4">
+                   <div className="bg-white/10 px-4 py-2 rounded-xl"><p className="text-[10px] text-gray-400 uppercase">总成本</p><p className="font-black">¥{selectedBatch.cost}</p></div>
+                   <div className="bg-white/10 px-4 py-2 rounded-xl"><p className="text-[10px] text-gray-400 uppercase">总重量</p><p className="font-black">{selectedBatch.totalWeight}斤</p></div>
+                </div>
+             </div>
+          </header>
+          
+          <div className="flex-1 overflow-y-auto px-4 -mt-8 space-y-4 pb-32 no-scrollbar">
+             <div className="bg-white p-6 rounded-[2rem] shadow-sm space-y-4">
+                <div className="flex justify-between items-center">
+                   <h3 className="font-black text-gray-800">关联商品</h3>
+                   <button onClick={() => { setSelectedBatchId(selectedBatch.id); setProductForm({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' }); setSubView('add_product'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black"><PlusCircle size={14}/> 添加商品</button>
+                </div>
+                {products.map(p => (
+                   <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice.toString(), stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
+                      <div><p className="font-black text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-bold">库存: {p.stockQty}</p></div>
+                      <Edit2 size={16} className="text-gray-300" />
+                   </div>
+                ))}
+             </div>
+             
+             <div className="bg-white p-6 rounded-[2rem] shadow-sm space-y-4">
+                <div className="flex justify-between items-center">
+                   <h3 className="font-black text-gray-800">额外费用</h3>
+                   <button onClick={() => setShowFeeModal(true)} className="flex items-center gap-1 text-blue-600 text-xs font-black"><PlusCircle size={14}/> 添加费用</button>
+                </div>
+                {selectedBatch.extraFees.length > 0 ? selectedBatch.extraFees.map(f => (
+                   <div key={f.id} className="flex justify-between items-center border-b border-gray-50 pb-2 last:border-0 last:pb-0">
+                      <span className="text-gray-500 font-bold text-sm">{f.name}</span>
+                      <div className="flex items-center gap-3">
+                         <span className="font-black text-gray-800">¥{f.amount}</span>
+                         <button onClick={() => removeExtraFee(selectedBatch.id, f.id)} className="text-red-300"><Minus size={14} /></button>
+                      </div>
+                   </div>
+                )) : <div className="text-center text-xs text-gray-300 py-2">暂无额外费用</div>}
+             </div>
+          </div>
+          
+          {showFeeModal && (
+             <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-6 animate-in fade-in">
+                <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 space-y-4">
+                   <h3 className="font-black text-xl">添加费用</h3>
+                   <input value={feeForm.name} onChange={e => setFeeForm({...feeForm, name: e.target.value})} placeholder="费用名称" className="w-full bg-gray-50 p-4 rounded-xl font-bold" />
+                   <input type="number" value={feeForm.amount} onChange={e => setFeeForm({...feeForm, amount: e.target.value})} placeholder="金额" className="w-full bg-gray-50 p-4 rounded-xl font-bold" />
+                   <button onClick={handleAddFee} className="w-full bg-blue-500 text-white py-4 rounded-xl font-black">确认添加</button>
+                   <button onClick={() => setShowFeeModal(false)} className="w-full text-gray-400 py-2 font-bold">取消</button>
+                </div>
+             </div>
+          )}
+       </div>
+    );
+  }
+
+  // 4. Add/Edit Product Modal
+  if (subView === 'add_product' || subView === 'edit_product') {
+     return (
+        <FormModal title={subView === 'add_product' ? '添加商品' : '编辑商品'} onBack={() => setSubView('batch_detail')} onSave={handleSaveProduct}>
+           <ProductFormFields productForm={productForm} setProductForm={setProductForm} />
+           {subView === 'edit_product' && (
+              <button onClick={() => { if(confirm('确认删除该商品吗？')) { deleteProduct(selectedProductId!); setSubView('batch_detail'); }}} className="w-full mt-8 py-4 text-red-500 bg-red-50 rounded-2xl font-black flex items-center justify-center gap-2"><Trash2 size={18}/> 删除此商品</button>
+           )}
+        </FormModal>
+     );
+  }
+
+  // 5. History View (Standard List)
   if (subView === 'history') {
-    // Filter orders... (Existing logic)
-    const filteredOrders = data.orders.filter(o => {
-      const matchesSearch = o.orderNo.includes(orderSearch) || o.customerName.includes(orderSearch);
-      const matchesBatch = filterBatchId === 'ALL' 
-        ? true 
-        : o.items.some(item => getProductBatchId(item.productId) === filterBatchId);
-      return matchesSearch && matchesBatch;
-    });
-
     return (
       <SubViewShell 
         title="单据查询" 
         onBack={() => setSubView('main')} 
         searchProps={{ value: orderSearch, onChange: setOrderSearch, placeholder: '搜索单号或客户...' }}
-        batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: data.batches }}
+        batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
       >
-        {filteredOrders.map(o => (
-          <div key={o.id} onClick={() => { setSelectedOrderId(o.id); setSubView('order_detail'); }} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 active:bg-gray-50 transition-all">
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-black text-lg">{o.customerName}</span>
-              <span className={`text-xs font-black px-2 py-0.5 rounded-full ${o.status === OrderStatus.ACTIVE ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'}`}>{o.status === OrderStatus.ACTIVE ? '有效' : '已作废'}</span>
-            </div>
-            <div className="flex justify-between items-end text-sm">
-              <div className="text-gray-400 space-y-1"><p>单号: {o.orderNo}</p><p>时间: {new Date(o.createdAt).toLocaleString()}</p></div>
-              <p className="text-xl font-black text-emerald-600">¥{o.totalAmount.toLocaleString()}</p>
-            </div>
-            {filterBatchId !== 'ALL' && (
-               <div className="mt-2 pt-2 border-t border-dashed border-gray-100 text-[10px] text-gray-400">
-                 * 此单包含当前筛选车次的商品
-               </div>
-            )}
-          </div>
-        ))}
-        {filteredOrders.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">无符合条件的订单</div>}
-      </SubViewShell>
-    );
-  }
-
-  if (subView === 'order_detail' && selectedOrder) {
-    return (
-      <SubViewShell title="订单详情" onBack={() => setSubView('history')}>
-        <div className="bg-white p-6 rounded-3xl space-y-4">
-          <p className="font-black text-2xl">{selectedOrder.customerName}</p>
-          <div className="space-y-1 text-xs text-gray-500"><p>单号: {selectedOrder.orderNo}</p><p>时间: {new Date(selectedOrder.createdAt).toLocaleString()}</p></div>
-          <div className="border-t border-dashed my-4"></div>
-          {selectedOrder.items.map((item, i) => (
-            <div key={i} className="flex justify-between items-center"><p className="font-bold">{item.productName} <span className="text-gray-400">x{item.qty}</span></p><p>¥{item.subtotal}</p></div>
-          ))}
-          <div className="border-t pt-4 space-y-2 text-sm">
-            <div className="flex justify-between"><span>应收</span><span className="font-black">¥{selectedOrder.totalAmount}</span></div>
-            <div className="flex justify-between"><span>实收</span><span className="font-black text-emerald-500">¥{selectedOrder.receivedAmount}</span></div>
-            <div className="flex justify-between"><span>欠款</span><span className="font-black text-red-500">¥{(selectedOrder.totalAmount - selectedOrder.receivedAmount).toFixed(2)}</span></div>
-          </div>
-          {selectedOrder.status === OrderStatus.ACTIVE && <button onClick={() => { if(confirm('确认作废此单？库存和欠款将回退。')){ cancelOrder(selectedOrder.id); setSubView('history');} }} className="w-full mt-4 py-4 bg-red-50 text-red-500 rounded-2xl font-black flex items-center justify-center gap-2"><AlertTriangle size={16}/> 作废此单</button>}
-        </div>
-      </SubViewShell>
-    );
-  }
-
-  if (subView === 'inventory') {
-    // Filter Products by Search AND Batch
-    const filteredProducts = data.products.filter(p => {
-       const matchSearch = p.name.includes(invSearch);
-       const matchBatch = filterBatchId === 'ALL' || p.batchId === filterBatchId;
-       return matchSearch && matchBatch;
-    });
-
-    return (
-      <SubViewShell 
-        title="库存盘点" 
-        onBack={() => setSubView('main')} 
-        searchProps={{ value: invSearch, onChange: setInvSearch, placeholder: "搜索品名..." }}
-        batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: data.batches }}
-      >
-        <div className="bg-blue-50 text-blue-600 p-3 rounded-2xl text-xs font-bold mb-2 flex items-start gap-2">
-            <div className="shrink-0 mt-0.5"><AlertTriangle size={14}/></div>
-            <div>如遇烂果损耗、水分流失或试吃赠送，请点击“修正”按钮，输入实际剩余库存，系统将自动记录差额。</div>
-        </div>
-
-        {filteredProducts.map(p => {
-          const batch = data.batches.find(b => b.id === p.batchId);
-          return (
-            <div key={p.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 relative group">
-              <div className="grid grid-cols-3 items-center mb-1">
-                <div className="col-span-1">
-                    <p className="font-black text-lg">{p.name}</p>
-                    {filterBatchId === 'ALL' && batch && (
-                    <span className="text-[9px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch.plateNumber}</span>
-                    )}
-                </div>
-                <p className="text-center"><span className="font-bold text-xl">{p.stockQty}</span><span className="text-xs text-gray-400"> 件</span></p>
-                <p className="text-center"><span className="font-bold text-xl">{p.stockWeight.toFixed(1)}</span><span className="text-xs text-gray-400"> 斤</span></p>
-              </div>
-
-              {/* Action Bar */}
-              <div className="mt-4 pt-3 border-t border-dashed border-gray-100 flex justify-end">
-                <button 
-                  onClick={() => {
-                    setAdjustForm({
-                        id: p.id,
-                        name: p.name,
-                        currentQty: p.stockQty,
-                        currentWeight: p.stockWeight,
-                        actualQty: '',
-                        actualWeight: ''
-                    });
-                    setSubView('adjust_stock');
-                  }}
-                  className="bg-gray-100 text-gray-600 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 active:scale-95 transition-all hover:bg-emerald-50 hover:text-emerald-600"
+        {filteredOrders.length > 0 ? filteredOrders.map(order => {
+             const isCancelled = order.status === OrderStatus.CANCELLED;
+             return (
+                <div 
+                  key={order.id}
+                  onClick={() => { setSelectedOrderId(order.id); setSubView('order_detail'); }} 
+                  className={`bg-white rounded-2xl p-4 shadow-sm border ${isCancelled ? 'border-red-100 bg-red-50/30 opacity-70' : 'border-gray-50'} active:scale-[0.98] transition-all flex justify-between items-center`}
                 >
-                    <ClipboardEdit size={14} /> 修正/损耗
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        {filteredProducts.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">暂无库存记录</div>}
-      </SubViewShell>
-    );
-  }
-
-  // 新增：库存修正弹窗视图
-  if (subView === 'adjust_stock') {
-    const diffQty = adjustForm.actualQty ? parseInt(adjustForm.actualQty) - adjustForm.currentQty : 0;
-    const diffWeight = adjustForm.actualWeight ? parseFloat(adjustForm.actualWeight) - adjustForm.currentWeight : 0;
-    
-    return (
-        <FormModal 
-            title="库存盘点修正" 
-            onBack={() => setSubView('inventory')} 
-            onSave={() => {
-                if (!adjustForm.actualQty && !adjustForm.actualWeight) return;
-                const newQty = adjustForm.actualQty ? parseInt(adjustForm.actualQty) : adjustForm.currentQty;
-                const newWeight = adjustForm.actualWeight ? parseFloat(adjustForm.actualWeight) : adjustForm.currentWeight;
-                adjustStock(adjustForm.id, newQty, newWeight);
-                setSubView('inventory');
-            }}
-        >
-            <div className="space-y-6">
-                <div className="bg-gray-100 p-5 rounded-3xl text-center space-y-1">
-                    <p className="text-gray-400 text-xs font-black uppercase tracking-widest">正在修正</p>
-                    <p className="text-2xl font-black text-gray-800">{adjustForm.name}</p>
-                    <p className="text-xs text-gray-500 font-bold">系统账面：{adjustForm.currentQty}件 / {adjustForm.currentWeight.toFixed(1)}斤</p>
+                  <div>
+                     <div className="flex items-center gap-2 mb-1">
+                        <span className={`font-black ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
+                        {isCancelled && <span className="bg-red-100 text-red-500 text-[10px] px-1 rounded">已作废</span>}
+                     </div>
+                     <p className="text-xs text-gray-400 font-bold mb-1">{order.items.length}项商品 - {new Date(order.createdAt).toLocaleTimeString()}</p>
+                     <p className="text-[10px] text-gray-300 font-mono">{order.orderNo}</p>
+                  </div>
+                  <div className="text-right">
+                     <p className="font-black text-lg text-gray-900">¥{order.totalAmount}</p>
+                     <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0 ? 'text-red-400' : 'text-emerald-500'}`}>
+                        {order.totalAmount - order.receivedAmount > 0 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
+                     </p>
+                  </div>
                 </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <label className="text-xs font-black text-blue-500 uppercase px-2">实盘件数</label>
-                        <input 
-                            type="number"
-                            autoFocus
-                            placeholder={adjustForm.currentQty.toString()}
-                            value={adjustForm.actualQty}
-                            onChange={e => setAdjustForm({...adjustForm, actualQty: e.target.value})}
-                            className="w-full bg-white border-2 border-gray-100 p-4 rounded-2xl font-black text-2xl text-center outline-none focus:border-blue-500 transition-all"
-                        />
-                         {adjustForm.actualQty && diffQty !== 0 && (
-                            <p className={`text-center text-xs font-black ${diffQty < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                {diffQty > 0 ? '+' : ''}{diffQty} 件
-                            </p>
-                        )}
-                    </div>
-                    <div className="space-y-2">
-                        <label className="text-xs font-black text-blue-500 uppercase px-2">实盘重量 (斤)</label>
-                        <input 
-                            type="number"
-                            placeholder={adjustForm.currentWeight.toString()}
-                            value={adjustForm.actualWeight}
-                            onChange={e => setAdjustForm({...adjustForm, actualWeight: e.target.value})}
-                            className="w-full bg-white border-2 border-gray-100 p-4 rounded-2xl font-black text-2xl text-center outline-none focus:border-blue-500 transition-all"
-                        />
-                         {adjustForm.actualWeight && diffWeight !== 0 && (
-                            <p className={`text-center text-xs font-black ${diffWeight < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                                {diffWeight > 0 ? '+' : ''}{diffWeight.toFixed(1)} 斤
-                            </p>
-                        )}
-                    </div>
-                </div>
-
-                {(diffQty < 0 || diffWeight < 0) && (
-                    <div className="bg-red-50 p-4 rounded-2xl flex items-center gap-3 text-red-600 animate-in fade-in">
-                        <TrendingUp className="rotate-180" size={20} />
-                        <div>
-                            <p className="text-xs font-black uppercase">检测到库存损耗</p>
-                            <p className="text-xs opacity-80">系统将自动扣减，不计入销售收入。</p>
-                        </div>
-                    </div>
-                )}
-                 {(diffQty > 0 || diffWeight > 0) && (
-                    <div className="bg-emerald-50 p-4 rounded-2xl flex items-center gap-3 text-emerald-600 animate-in fade-in">
-                        <TrendingUp size={20} />
-                        <div>
-                            <p className="text-xs font-black uppercase">检测到库存盘盈</p>
-                            <p className="text-xs opacity-80">多余库存将录入系统。</p>
-                        </div>
-                    </div>
-                )}
-            </div>
-        </FormModal>
-    );
-  }
-
-  if (subView === 'customers') {
-    // Advanced Logic for Batch-Specific Accounts Receivable
-    const customerDisplayList = data.customers
-      .filter(c => !c.isGuest && c.name.includes(custSearch))
-      .map(c => {
-        if (filterBatchId === 'ALL') {
-            return { ...c, displayValue: c.totalDebt, label: '当前欠款' };
-        } else {
-            // Calculate total purchases by this customer from this batch
-            let batchPurchaseTotal = 0;
-            data.orders.forEach(o => {
-                if (o.customerId === c.id && o.status === OrderStatus.ACTIVE) {
-                    o.items.forEach(item => {
-                        if (getProductBatchId(item.productId) === filterBatchId) {
-                            batchPurchaseTotal += item.subtotal;
-                        }
-                    });
-                }
-            });
-            return { ...c, displayValue: batchPurchaseTotal, label: '本车购买额' };
-        }
-      })
-      .filter(c => c.displayValue > 0) // Only show relevant customers
-      .sort((a,b) => b.displayValue - a.displayValue);
-
-    return (
-      <SubViewShell 
-        title={filterBatchId === 'ALL' ? "应收账款" : "车次客户统计"}
-        onBack={() => setSubView('main')} 
-        searchProps={{ value: custSearch, onChange: setCustSearch, placeholder: "搜索客户..." }}
-        batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: data.batches }}
-      >
-        {customerDisplayList.map(c => (
-          <div key={c.id} className="bg-white p-5 rounded-2xl flex justify-between items-center shadow-sm border border-gray-50">
-            <p className="font-black text-lg">{c.name}</p>
-            <div className="text-right">
-                <p className={`font-black text-2xl ${filterBatchId === 'ALL' ? 'text-red-500' : 'text-emerald-500'}`}>¥{c.displayValue.toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400 font-bold uppercase">{c.label}</p>
-            </div>
-          </div>
-        ))}
-        {customerDisplayList.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">无相关数据</div>}
-      </SubViewShell>
-    );
-  }
-  
-  // ... (reconcile logic unchanged) ...
-  if (subView === 'reconcile') {
-    // Reconcile Logic
-    // ALL: Store Global View
-    // BATCH: Specific Batch Profitability
-
-    let displayData = {
-        label1: '累计总营收', val1: 0, color1: 'text-emerald-600',
-        label2: '累计总实收', val2: 0, color2: 'text-blue-600',
-        label3: '当前总欠款', val3: 0, color3: 'text-red-600',
-        isBatchView: false
-    };
-
-    if (filterBatchId === 'ALL') {
-        const totalRevenue = data.orders.filter(o=>o.status===OrderStatus.ACTIVE).reduce((s,o)=>s+o.totalAmount,0);
-        const totalReceived = data.orders.filter(o=>o.status===OrderStatus.ACTIVE).reduce((s,o)=>s+o.receivedAmount,0);
-        const totalDebt = data.customers.reduce((s,c)=>s+c.totalDebt,0);
-        displayData = {
-            label1: '累计总营收', val1: totalRevenue, color1: 'text-emerald-600',
-            label2: '累计总实收', val2: totalReceived, color2: 'text-blue-600',
-            label3: '当前总欠款', val3: totalDebt, color3: 'text-red-600',
-            isBatchView: false
-        };
-    } else {
-        // Specific Batch Calculation
-        const batch = data.batches.find(b => b.id === filterBatchId);
-        if (batch) {
-            let batchRevenue = 0;
-            data.orders.filter(o => o.status === OrderStatus.ACTIVE).forEach(o => {
-                o.items.forEach(item => {
-                    if (getProductBatchId(item.productId) === batch.id) {
-                        batchRevenue += item.subtotal;
-                    }
-                });
-            });
-            const batchCost = batch.cost + batch.extraFees.reduce((s, f) => s + f.amount, 0);
-            const batchProfit = batchRevenue - batchCost;
-
-            displayData = {
-                label1: '本车销售额', val1: batchRevenue, color1: 'text-emerald-600',
-                label2: '总成本投入', val2: batchCost, color2: 'text-orange-600',
-                label3: '毛利盈亏', val3: batchProfit, color3: batchProfit >= 0 ? 'text-emerald-600' : 'text-red-500',
-                isBatchView: true
-            };
-        }
-    }
-
-    return (
-      <SubViewShell 
-        title="财务核对" 
-        onBack={() => setSubView('main')}
-        batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: data.batches }}
-      >
-         <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-50 space-y-2">
-            <p className="text-sm text-gray-400 font-bold">{displayData.label1}</p>
-            <p className={`font-black text-3xl ${displayData.color1}`}>¥{displayData.val1.toLocaleString()}</p>
-         </div>
-         <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-50 space-y-2">
-            <p className="text-sm text-gray-400 font-bold">{displayData.label2}</p>
-            <p className={`font-black text-3xl ${displayData.color2}`}>¥{displayData.val2.toLocaleString()}</p>
-         </div>
-         <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-50 space-y-2">
-            <p className="text-sm text-gray-400 font-bold">{displayData.label3}</p>
-            <p className={`font-black text-3xl ${displayData.color3}`}>¥{displayData.val3.toLocaleString()}</p>
-         </div>
-         
-         {displayData.isBatchView && (
-             <div className="text-center text-xs text-gray-400 pt-4">
-                 * 车次视图下不显示“实收”和“欠款”，因为收款是针对整单的，无法精准拆分到车次。
-             </div>
-         )}
-      </SubViewShell>
-    );
-  }
-
-  if (subView === 'batch_detail' && selectedBatch && batchAnalysis) {
-    return (
-      <div className="flex flex-col h-screen bg-[#F4F6F9] animate-in fade-in overflow-hidden">
-        <header className="bg-white px-4 py-4 border-b flex items-center shrink-0"><button onClick={() => setSubView('main')} className="p-2 -ml-2 active:scale-90"><ArrowLeft /></button><h1 className="text-lg font-black flex-1 text-center">{selectedBatch.plateNumber} 看板</h1><button onClick={() => { setBatchForm({ plate: selectedBatch.plateNumber, cost: selectedBatch.cost.toString(), weight: selectedBatch.totalWeight.toString() }); setSubView('edit_batch'); }} className="p-2 text-blue-500 active:scale-90"><Edit2 size={20}/></button></header>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32 no-scrollbar">
-           <div className="bg-[#1C2033] text-white p-7 rounded-[2.5rem] shadow-2xl space-y-6 relative overflow-hidden"><div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-2xl"></div><div className="flex justify-between items-start"><div><p className="text-[10px] text-gray-400 font-black uppercase">批次: #{selectedBatch.batchNo}</p><h2 className="text-3xl font-black tracking-tight">{selectedBatch.plateNumber}</h2></div><div className="text-right"><p className="text-[10px] text-emerald-400 font-black uppercase">当前流水</p><p className="text-2xl font-black text-emerald-400">¥{batchAnalysis.totalSales.toLocaleString()}</p></div></div><div className="space-y-3 pt-2"><div className="flex justify-between items-end"><span className="text-xs font-black">{batchAnalysis.profit >= 0 ? '当前盈利' : '尚未回本'}</span><span className={`text-xl font-black ${batchAnalysis.profit >= 0 ? 'text-emerald-400' : 'text-orange-400'}`}>¥{Math.abs(batchAnalysis.profit).toLocaleString()}</span></div><div className="h-3 bg-white/10 rounded-full overflow-hidden"><div className={`h-full ${batchAnalysis.profit >= 0 ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${batchAnalysis.progress}%` }}></div></div></div></div>
-           <div className="space-y-3"><div className="flex justify-between items-center px-2"><h3 className="font-black text-gray-800">入库规格清单</h3><button onClick={() => { setProductForm({ name: '', category:'柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0' }); setSubView('add_product'); }} className="text-xs font-black text-blue-600 bg-blue-50 px-4 py-2 rounded-full border border-blue-100">+ 新规格</button></div>{productPerformance.map(p => (<div key={p.id} className="bg-white p-5 rounded-[2rem] flex justify-between items-center shadow-sm border border-gray-100"><div className="flex items-center gap-4"><div className={`p-3 rounded-2xl ${p.pricingMode === 'WEIGHT' ? 'bg-orange-50 text-orange-500' : 'bg-blue-50 text-blue-500'}`}>{p.pricingMode === 'WEIGHT' ? <Scale size={20} /> : <BoxSelect size={20} />}</div><div><p className="font-black text-gray-800">{p.name}</p><p className="text-[10px] text-gray-400 font-bold uppercase">余:{p.stockQty}件 / 售:{p.soldQty}件</p></div></div><div className="flex gap-1"><button onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice?.toString() || '', stock: p.stockQty.toString(), tare: p.defaultTare.toString() }); setSubView('edit_product'); }} className="p-2 text-gray-300"><Edit2 size={16}/></button><button onClick={() => { if(confirm('确认删除规格？')) deleteProduct(p.id); }} className="p-2 text-gray-300"><Trash2 size={16} /></button></div></div>))}</div>
-           <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-4"><div className="flex justify-between items-center"><h3 className="font-black text-gray-800">批次费用明细</h3><button onClick={() => setShowFeeModal(true)} className="text-xs font-black text-blue-600 bg-blue-50 px-4 py-2 rounded-full border border-blue-100">+ 杂费</button></div><div className="space-y-2"><div className="flex justify-between p-3 bg-gray-50 rounded-xl text-xs font-bold"><span>产地货款</span><span>¥{selectedBatch.cost.toLocaleString()}</span></div>{selectedBatch.extraFees.map(fee => (<div key={fee.id} className="flex justify-between p-3 bg-red-50/50 rounded-xl text-xs font-black text-red-600"><span>{fee.name}</span><div className="flex items-center gap-3"><span>¥{fee.amount}</span><button onClick={() => removeExtraFee(selectedBatch.id, fee.id)} className="text-red-200"><Minus size={14} /></button></div></div>))} <div className="flex justify-between pt-3 border-t font-black"><span className="text-xs uppercase">累计投入成本</span><span className="text-lg">¥{batchAnalysis.totalCost.toLocaleString()}</span></div></div></div>
-           
-           <button onClick={() => { 
-             const batchProductIds = data.products.filter(p => p.batchId === selectedBatch.id).map(p => p.id);
-             const hasActiveOrders = data.orders.some(o => 
-               o.status === OrderStatus.ACTIVE && 
-               o.items.some(item => batchProductIds.includes(item.productId))
              );
-             
-             if (hasActiveOrders) {
-               alert('❌ 删除失败：该车次下存在关联的销售订单。\n\n请先前往“单据查询”将相关订单作废，确保数据一致性后再进行删除。');
-               return;
-             }
+        }) : (
+            <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                <Search size={48} strokeWidth={1} className="opacity-20"/>
+                <p className="font-bold text-sm">没有找到相关订单</p>
+            </div>
+        )}
+      </SubViewShell>
+    );
+  }
 
-             if(confirm('⚠️ 危险操作警告\n\n确认要彻底删除该车次吗？\n此操作将永久删除该车次及其所有关联的商品规格，且无法恢复！')) { 
-               deleteBatch(selectedBatch.id); 
-               setSubView('main'); 
-             } 
-           }} className="w-full py-5 text-red-300 font-black text-[10px] uppercase tracking-widest border-2 border-dashed border-red-50 rounded-[2rem]">删除整车记录</button>
-        
-        </div>
-        {showFeeModal && <div className="fixed inset-0 z-[300] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 animate-in zoom-in"><div className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 space-y-6 shadow-2xl"><h2 className="text-xl font-black">登记额外支出</h2><input value={feeForm.name} onChange={e=>setFeeForm({...feeForm, name: e.target.value})} placeholder="支出说明" className="w-full bg-gray-50 p-5 rounded-2xl font-black" /><input type="number" autoFocus value={feeForm.amount} onChange={e=>setFeeForm({...feeForm, amount: e.target.value})} placeholder="金额" className="w-full bg-gray-50 p-5 rounded-2xl font-black text-3xl text-emerald-600" /><button onClick={() => { if(!feeForm.amount) return; addExtraFee(selectedBatch.id, { id: Date.now().toString(), name: feeForm.name, amount: parseFloat(feeForm.amount) }); setShowFeeModal(false); setFeeForm({name:'运费', amount:''}); }} className="w-full bg-gray-900 text-white py-5 rounded-3xl font-black">确认记录</button></div></div>}
+  // 6. Order Detail View
+  if (subView === 'order_detail' && selectedOrder) {
+    const isCancelled = selectedOrder.status === OrderStatus.CANCELLED;
+    return (
+      <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
+         <header className="bg-[#2D3142] text-white p-6 pb-8 shrink-0 relative z-20">
+            <div className="flex justify-between items-center mb-6">
+               <button onClick={() => setSubView('history')} className="bg-white/10 p-2 rounded-full"><ArrowLeft size={20} /></button>
+               <h1 className="font-black text-lg">订单详情</h1>
+               <div className="w-9"></div>
+            </div>
+            <div className="text-center space-y-1">
+               <p className="text-3xl font-black">¥{selectedOrder.totalAmount}</p>
+               <p className={`text-sm font-bold opacity-80 ${isCancelled ? 'text-red-400' : ''}`}>{isCancelled ? '已作废' : '订单总额'}</p>
+            </div>
+         </header>
+         <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-6 relative z-10 pt-10">
+            <div className="space-y-4">
+               {selectedOrder.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center border-b border-gray-50 pb-4 last:border-0">
+                     <div>
+                        <p className="font-black text-gray-800 text-lg">{item.productName}</p>
+                        <p className="text-xs text-gray-400 font-bold">{item.qty}件 | ¥{item.unitPrice}/单价</p>
+                     </div>
+                     <p className="font-black text-gray-900">¥{item.subtotal}</p>
+                  </div>
+               ))}
+            </div>
+            
+            <div className="bg-gray-50 p-6 rounded-2xl space-y-3">
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">客户</span><span className="font-black">{selectedOrder.customerName}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">支付方式</span><span className="font-black">{selectedOrder.paymentMethod}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">实收</span><span className="font-black text-emerald-600">¥{selectedOrder.receivedAmount}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">优惠/抹零</span><span className="font-black text-gray-800">¥{selectedOrder.discount}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">时间</span><span className="font-black text-gray-800">{new Date(selectedOrder.createdAt).toLocaleString()}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">单号</span><span className="font-black text-gray-400 font-mono text-xs">{selectedOrder.orderNo}</span></div>
+            </div>
+
+            {!isCancelled && (
+                <button 
+                  onClick={() => { 
+                      deleteOrder(selectedOrder.id); 
+                      setSubView('history'); 
+                  }} 
+                  className="w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black text-lg active:bg-red-100 transition-all flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={20} />
+                  删除此单 (自动退货/退库存)
+                </button>
+            )}
+         </div>
       </div>
     );
   }
-  
-  if (subView === 'edit_batch' && selectedBatch) {
-    return <FormModal title="编辑车辆信息" onBack={()=>setSubView('batch_detail')} onSave={()=>{ updateBatch({ ...selectedBatch, plateNumber: batchForm.plate, cost: parseFloat(batchForm.cost) || 0, totalWeight: parseFloat(batchForm.weight) || 0 }); setSubView('batch_detail'); }}>
-      <BatchFormFields batchForm={batchForm} setBatchForm={setBatchForm} />
-    </FormModal>;
+
+  // 7. Inventory List View (Standard List)
+  if (subView === 'inventory') {
+     return (
+        <SubViewShell 
+            title="库存盘点" 
+            onBack={() => setSubView('main')}
+            searchProps={{ value: invSearch, onChange: setInvSearch, placeholder: '搜索库存商品...' }}
+            batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
+        >
+            {filteredInventory.length > 0 ? filteredInventory.map(p => {
+               const isLowStock = p.stockQty <= (p.lowStockThreshold || 10);
+               const batch = data.batches.find(b => b.id === p.batchId);
+               return (
+                  <div key={p.id} className={`bg-white rounded-2xl p-4 shadow-sm border active:scale-[0.99] transition-all flex justify-between items-center ${isLowStock ? 'border-red-200 bg-red-50/20' : 'border-gray-50'}`}>
+                     <div>
+                        <div className="flex items-center gap-2">
+                           <h3 className="font-black text-gray-800">{p.name}</h3>
+                           <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch?.plateNumber}</span>
+                           {isLowStock && <AlertTriangle size={14} className="text-red-500" />}
+                        </div>
+                        <p className="text-xs text-gray-400 font-bold mt-1">
+                           {p.stockQty}件 {p.pricingMode === PricingMode.WEIGHT && `| ${p.stockWeight.toFixed(1)}斤`}
+                        </p>
+                     </div>
+                     <button 
+                       onClick={() => { 
+                           setAdjustForm({ 
+                               id: p.id, 
+                               name: p.name, 
+                               currentQty: p.stockQty, 
+                               currentWeight: p.stockWeight,
+                               actualQty: '',
+                               actualWeight: ''
+                           }); 
+                           setSubView('adjust_stock'); 
+                       }} 
+                       className="px-3 py-2 bg-gray-50 text-emerald-600 rounded-xl text-xs font-black border border-gray-100"
+                     >
+                        盘点
+                     </button>
+                  </div>
+               );
+            }) : (
+                <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                    <BoxSelect size={48} strokeWidth={1} className="opacity-20"/>
+                    <p className="font-bold text-sm">无符合条件的商品</p>
+                </div>
+            )}
+        </SubViewShell>
+     );
   }
 
-  if (subView === 'add_product' && selectedBatchId) {
-    return <FormModal title="新增规格" onBack={()=>setSubView('batch_detail')} onSave={()=>{ addProduct({ id: Date.now().toString(), batchId: selectedBatchId, name: productForm.name, category: productForm.category, pricingMode: productForm.mode, defaultTare: parseFloat(productForm.tare) || 0, stockQty: parseInt(productForm.stock) || 0, stockWeight: 0, sellingPrice: parseFloat(productForm.sell) || 0 }); setSubView('batch_detail'); }}>
-      <ProductFormFields productForm={productForm} setProductForm={setProductForm} />
-    </FormModal>
-  }
+  // 8. Adjust Stock View
+  if (subView === 'adjust_stock') {
+    return (
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-bottom">
+            <header className="px-6 py-6 border-b flex items-center justify-between">
+                <h2 className="text-2xl font-black text-gray-800">库存修正</h2>
+                <button onClick={() => setSubView('inventory')} className="p-2 bg-gray-100 rounded-full"><X size={20}/></button>
+            </header>
+            <div className="p-8 space-y-8">
+                <div>
+                    <p className="text-sm font-bold text-gray-400 mb-2">当前商品</p>
+                    <h3 className="text-3xl font-black text-gray-900">{adjustForm.name}</h3>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-gray-50 p-4 rounded-2xl border-2 border-transparent">
+                        <p className="text-xs font-black text-gray-400 uppercase">系统库存 (件)</p>
+                        <p className="text-2xl font-black text-gray-800">{adjustForm.currentQty}</p>
+                    </div>
+                    <div className="bg-emerald-50 p-4 rounded-2xl border-2 border-emerald-500 relative">
+                        <p className="text-xs font-black text-emerald-600 uppercase">实际盘点 (件)</p>
+                        <input 
+                            autoFocus
+                            type="number" 
+                            value={adjustForm.actualQty} 
+                            onChange={e => setAdjustForm({...adjustForm, actualQty: e.target.value})}
+                            className="w-full bg-transparent text-2xl font-black text-emerald-900 outline-none mt-1 placeholder-emerald-200"
+                            placeholder="?"
+                        />
+                        <div className="absolute top-2 right-2 text-emerald-500"><Edit2 size={16}/></div>
+                    </div>
+                </div>
 
-  if (subView === 'edit_product' && selectedProduct) {
-    return <FormModal title="编辑规格" onBack={()=>setSubView('batch_detail')} onSave={()=>{ updateProduct({ ...selectedProduct, name: productForm.name, category: productForm.category, pricingMode: productForm.mode, stockQty: parseInt(productForm.stock) || selectedProduct.stockQty, defaultTare: parseFloat(productForm.tare) || 0, sellingPrice: parseFloat(productForm.sell) || 0 }); setSubView('batch_detail'); }}>
-      <ProductFormFields productForm={productForm} setProductForm={setProductForm} />
-    </FormModal>
-  }
+                {/* 如果是按斤计价的，可能也需要修正重量 */}
+                <div className="grid grid-cols-2 gap-6">
+                    <div className="bg-gray-50 p-4 rounded-2xl border-2 border-transparent">
+                        <p className="text-xs font-black text-gray-400 uppercase">系统重量 (斤)</p>
+                        <p className="text-2xl font-black text-gray-800">{adjustForm.currentWeight.toFixed(1)}</p>
+                    </div>
+                     <div className="bg-blue-50 p-4 rounded-2xl border-2 border-blue-500 relative">
+                        <p className="text-xs font-black text-blue-600 uppercase">实际称重 (斤)</p>
+                        <input 
+                            type="number" 
+                            value={adjustForm.actualWeight} 
+                            onChange={e => setAdjustForm({...adjustForm, actualWeight: e.target.value})}
+                            className="w-full bg-transparent text-2xl font-black text-blue-900 outline-none mt-1 placeholder-blue-200"
+                            placeholder="?"
+                        />
+                        <div className="absolute top-2 right-2 text-blue-500"><Scale size={16}/></div>
+                    </div>
+                </div>
 
-  // --- MAIN VIEW ---
-  return (
-    <div className="flex flex-col h-screen bg-[#F4F6F9] overflow-hidden">
-      <header className="bg-white px-6 py-6 border-b flex items-center justify-between shrink-0">
-        <h1 className="text-3xl font-black text-[#1a2333] tracking-tight">业务管理</h1>
-        <div className="bg-[#f0f2f5] p-3 rounded-2xl text-[#9ca3af] shadow-inner active:scale-95 transition-all"><LayoutGrid size={24} strokeWidth={2.5} /></div>
-      </header>
-
-      <div className="p-4 space-y-8 flex-1 overflow-y-auto pb-32 no-scrollbar">
-        <div className="grid grid-cols-2 gap-4">
-           <div onClick={() => { setFilterBatchId('ALL'); setSubView('history'); }} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50 flex flex-col items-center gap-4 active:scale-[0.97] transition-all cursor-pointer"><div className="w-16 h-16 bg-[#ecfdf5] text-[#10b981] rounded-[1.5rem] flex items-center justify-center shadow-inner"><ArrowDownCircle size={36} strokeWidth={2.5} /></div><span className="text-sm font-black text-[#4b5563]">单据查询</span></div>
-           <div onClick={() => { setFilterBatchId('ALL'); setSubView('reconcile'); }} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50 flex flex-col items-center gap-4 active:scale-[0.97] transition-all cursor-pointer"><div className="w-16 h-16 bg-[#eff6ff] text-[#3b82f6] rounded-[1.5rem] flex items-center justify-center shadow-inner"><Wallet size={36} strokeWidth={2.5} /></div><span className="text-sm font-black text-[#4b5563]">财务核对</span></div>
-           <div onClick={() => { setFilterBatchId('ALL'); setSubView('customers'); }} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50 flex flex-col items-center gap-4 active:scale-[0.97] transition-all cursor-pointer"><div className="w-16 h-16 bg-[#fff1f2] text-[#ef4444] rounded-[1.5rem] flex items-center justify-center shadow-inner"><Users size={36} strokeWidth={2.5} /></div><span className="text-sm font-black text-[#4b5563]">应收账款</span></div>
-           <div onClick={() => { setFilterBatchId('ALL'); setSubView('inventory'); }} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50 flex flex-col items-center gap-4 active:scale-[0.97] transition-all cursor-pointer"><div className="w-16 h-16 bg-[#fff7ed] text-[#f59e0b] rounded-[1.5rem] flex items-center justify-center shadow-inner"><BarChart3 size={36} strokeWidth={2.5} /></div><span className="text-sm font-black text-[#4b5563]">库存盘点</span></div>
+                <div className="pt-8">
+                    <button onClick={handleAdjustStock} className="w-full bg-gray-900 text-white py-6 rounded-3xl font-black text-xl shadow-xl shadow-gray-200 active:scale-95 transition-all">确认修正</button>
+                    <p className="text-center text-xs text-gray-400 mt-4 font-bold">修正后系统将以新数据为准，差异不计入报表</p>
+                </div>
+            </div>
         </div>
+    );
+  }
 
-        <div className="space-y-4">
-           <div className="flex justify-between items-center px-2"><h3 className="font-black text-xl text-[#1a2333] flex items-center gap-2"><Truck size={24} className="text-[#10b981]" /> 在售车次管理</h3><button onClick={() => { setBatchForm({ plate: '', cost: '', weight: '' }); setSubView('add_batch'); }} className="text-xs font-black text-[#059669] bg-[#ecfdf5] px-5 py-2.5 rounded-full border border-[#d1fae5] active:scale-95 shadow-sm transition-all">+ 新增车辆</button></div>
-           <div className="space-y-3">
-              {data.batches.length === 0 ? (<div className="text-center py-16 rounded-3xl border-2 border-dashed border-gray-200/80"><p className="text-gray-400 text-sm font-medium">暂无在售车辆记录</p></div>) : data.batches.map(batch => (<div key={batch.id} onClick={() => { setSelectedBatchId(batch.id); setSubView('batch_detail'); }} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-50 flex justify-between items-center active:bg-gray-50 transition-all group cursor-pointer"><div className="flex items-center gap-5"><div className="w-14 h-14 bg-[#f8fafc] text-[#64748b] rounded-2xl flex items-center justify-center shadow-inner transition-transform group-active:scale-90"><Truck size={28} /></div><div><h4 className="font-black text-xl text-[#1a2333] leading-tight">{batch.plateNumber}</h4><p className="text-[10px] text-white font-black uppercase tracking-widest mt-1 inline-block px-2 py-0.5 bg-blue-500 rounded">重: {batch.totalWeight} 斤 / #{batch.batchNo}</p></div></div><ChevronRight className="text-[#d1d5db] group-active:translate-x-1 transition-transform" /></div>))}
-           </div>
-        </div>
-      </div>
+  // 9. Reconcile View
+  if (subView === 'reconcile') {
+      const filteredReconcileOrders = data.orders.filter(o => {
+          const isDate = o.createdAt.startsWith(reconcileDate);
+          const isActive = o.status === OrderStatus.ACTIVE;
+          let isBatch = true;
+          if (reconcileBatchId !== 'ALL') {
+             const batchProductIds = data.products.filter(p => p.batchId === reconcileBatchId).map(p => p.id);
+             isBatch = o.items.some(i => batchProductIds.includes(i.productId));
+          }
+          return isDate && isActive && isBatch;
+      });
 
-      {subView === 'add_batch' && (
-         <FormModal title="新车入场登记" onBack={() => setSubView('main')} onSave={() => { if(!batchForm.plate) return; addBatch({ id: Date.now().toString(), plateNumber: batchForm.plate.toUpperCase(), inboundDate: new Date().toISOString(), cost: parseFloat(batchForm.cost)||0, extraFees: [], totalWeight: parseFloat(batchForm.weight)||0, isClosed: false, batchNo: data.batches.length + 1 }); setSubView('main'); }}>
-            <BatchFormFields batchForm={batchForm} setBatchForm={setBatchForm} />
-         </FormModal>
-      )}
-    </div>
-  );
+      const filteredReconcileExpenses = data.expenses.filter(e => {
+          const isDate = e.date.startsWith(reconcileDate);
+          let isBatch = true;
+          if (reconcileBatchId !== 'ALL') {
+              isBatch = e.batchId === reconcileBatchId;
+          }
+          return isDate && isBatch;
+      });
+      
+      const income = filteredReconcileOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
+      const expense = filteredReconcileExpenses.reduce((sum, e) => sum + e.amount, 0);
+      
+      const byMethod = {
+          WECHAT: filteredReconcileOrders.filter(o => o.paymentMethod === 'WECHAT').reduce((s,o)=>s+o.receivedAmount,0),
+          ALIPAY: filteredReconcileOrders.filter(o => o.paymentMethod === 'ALIPAY').reduce((s,o)=>s+o.receivedAmount,0),
+          CASH: filteredReconcileOrders.filter(o => o.paymentMethod === 'CASH').reduce((s,o)=>s+o.receivedAmount,0),
+          OTHER: 0,
+      };
+
+      return (
+         <SubViewShell 
+             title="财务核对" 
+             onBack={() => setSubView('main')}
+             batchSelectorProps={{ 
+                selectedBatchId: reconcileBatchId, 
+                onSelectBatch: setReconcileBatchId, 
+                batches: activeBatches 
+            }}
+         >
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-2 flex items-center justify-between">
+                <span className="font-bold text-gray-500 text-sm flex items-center gap-1"><Calendar size={16}/> 选择日期</span>
+                <div className="relative">
+                     <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-lg">
+                        <span className="font-black text-gray-800">{reconcileDate}</span>
+                     </div>
+                     <input 
+                        type="date" 
+                        value={reconcileDate} 
+                        onChange={e => setReconcileDate(e.target.value)} 
+                        className="absolute inset-0 opacity-0 w-full h-full"
+                     />
+                </div>
+            </div>
+
+            <div className="space-y-4">
+                <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 text-center">
+                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest">净现金流 (选定日期/车次)</p>
+                    <p className="text-4xl font-black text-gray-900 mt-2">¥{(income - expense).toLocaleString()}</p>
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                        <div className="bg-emerald-50 p-3 rounded-2xl"><p className="text-[10px] text-emerald-600 font-bold uppercase">总收入</p><p className="text-xl font-black text-emerald-600">+{income}</p></div>
+                        <div className="bg-orange-50 p-3 rounded-2xl"><p className="text-[10px] text-orange-600 font-bold uppercase">总支出</p><p className="text-xl font-black text-orange-600">-{expense}</p></div>
+                    </div>
+                </div>
+
+                <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100">
+                    <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><Wallet size={18}/> 渠道明细</h3>
+                    <div className="space-y-3">
+                        <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl"><span>微信支付</span><span className="font-black">¥{byMethod.WECHAT}</span></div>
+                        <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl"><span>支付宝</span><span className="font-black">¥{byMethod.ALIPAY}</span></div>
+                        <div className="flex justify-between items-center p-3 bg-gray-50 rounded-xl"><span>现金</span><span className="font-black">¥{byMethod.CASH}</span></div>
+                    </div>
+                </div>
+            </div>
+         </SubViewShell>
+      );
+  }
+
+  // 10. Customers View
+  if (subView === 'customers') {
+      const debtCustomers = data.customers.filter(c => c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
+      const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);
+
+      return (
+         <SubViewShell 
+            title="应收账款" 
+            onBack={() => setSubView('main')}
+            searchProps={{ value: custSearch, onChange: setCustSearch, placeholder: '搜索欠款客户...' }}
+         >
+             <div className="bg-red-50 p-6 rounded-[2rem] mb-4 flex justify-between items-center border border-red-100">
+                 <div><p className="text-xs text-red-400 font-black uppercase tracking-widest">总应收款</p><p className="text-3xl font-black text-red-500">¥{totalReceivable.toLocaleString()}</p></div>
+                 <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-red-500 shadow-sm"><Users size={24}/></div>
+             </div>
+             
+             <div className="space-y-3">
+                 {debtCustomers.filter(c => c.name.includes(custSearch)).map(c => (
+                     <div key={c.id} className="bg-white p-5 rounded-[1.5rem] flex justify-between items-center shadow-sm border border-gray-50">
+                         <div>
+                             <p className="font-black text-gray-800 text-lg">{c.name}</p>
+                             <p className="text-xs text-gray-400 font-bold">电话: {c.phone || '未记录'}</p>
+                         </div>
+                         <div className="text-right">
+                             <p className="text-xl font-black text-red-500">¥{c.totalDebt.toLocaleString()}</p>
+                             <p className="text-[10px] text-gray-400 font-bold">欠款</p>
+                         </div>
+                     </div>
+                 ))}
+                 {debtCustomers.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">没有欠款客户，经营状况良好！</div>}
+             </div>
+         </SubViewShell>
+      );
+  }
+
+  return null;
 };
 
 export default ManageView;
