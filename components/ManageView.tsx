@@ -234,10 +234,15 @@ const ManageView: React.FC = () => {
   const [adjustForm, setAdjustForm] = useState({ 
     id: '', 
     name: '', 
+    batchName: '', // 新增：用于显示所属车次
     currentQty: 0, 
-    currentWeight: 0, 
+    currentWeight: 0,
+    initialQty: 0,
+    initialWeight: 0,
     actualQty: '', 
-    actualWeight: '' 
+    actualWeight: '',
+    actualInitialQty: '',
+    actualInitialWeight: ''
   });
 
   const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder } = useApp();
@@ -274,14 +279,23 @@ const ManageView: React.FC = () => {
   const handleSaveProduct = () => {
     if (!productForm.name) return alert('请输入商品名称');
     if (!selectedBatchId) return alert('未选择车次');
+    
+    // 获取现有商品（如果是编辑模式），以便保留旧的初始库存
+    const existing = subView === 'edit_product' ? data.products.find(p => p.id === selectedProductId) : null;
+    const inputStock = parseFloat(productForm.stock) || 0;
+    const inputWeight = productForm.mode === PricingMode.WEIGHT ? (inputStock * 20) : 0;
+
     const newProduct: Product = {
       id: subView === 'edit_product' && selectedProductId ? selectedProductId : Date.now().toString(),
       name: productForm.name,
       category: productForm.category,
       pricingMode: productForm.mode,
       sellingPrice: parseFloat(productForm.sell) || 0,
-      stockQty: parseFloat(productForm.stock) || 0,
-      stockWeight: productForm.mode === PricingMode.WEIGHT ? (parseFloat(productForm.stock) * 20) : 0, // Initial estimate
+      stockQty: inputStock,
+      stockWeight: inputWeight,
+      // 关键逻辑：新建时，初始库存=当前库存。编辑时，保留原有初始库存，除非是新创建的修正
+      initialStockQty: existing ? existing.initialStockQty : inputStock,
+      initialStockWeight: existing ? existing.initialStockWeight : inputWeight,
       defaultTare: parseFloat(productForm.tare) || 0,
       batchId: selectedBatchId,
       lowStockThreshold: parseFloat(productForm.threshold) || 20
@@ -294,15 +308,20 @@ const ManageView: React.FC = () => {
   const handleAdjustStock = () => {
     const qty = parseFloat(adjustForm.actualQty);
     const weight = parseFloat(adjustForm.actualWeight);
+    const initQty = parseFloat(adjustForm.actualInitialQty);
+    const initWeight = parseFloat(adjustForm.actualInitialWeight);
+
     if (isNaN(qty)) return alert('请输入实际库存件数');
+    if (isNaN(initQty)) return alert('请输入初始库存件数');
     
     // 如果是计重，必须输入重量
     const product = data.products.find(p => p.id === adjustForm.id);
-    if (product?.pricingMode === PricingMode.WEIGHT && isNaN(weight)) {
-         return alert('请输入实际总重量');
+    if (product?.pricingMode === PricingMode.WEIGHT) {
+        if (isNaN(weight)) return alert('请输入实际总重量');
+        if (isNaN(initWeight)) return alert('请输入初始总重量');
     }
 
-    adjustStock(adjustForm.id, qty, isNaN(weight) ? 0 : weight);
+    adjustStock(adjustForm.id, qty, isNaN(weight) ? 0 : weight, initQty, isNaN(initWeight) ? 0 : initWeight);
     setSubView('inventory');
   };
 
@@ -332,8 +351,6 @@ const ManageView: React.FC = () => {
         const matchSearch = name.includes(orderSearch) || no.includes(orderSearch);
         
         // Batch Filter (Only applies to orders effectively, repayments don't usually have batchId unless we track it)
-        // For simplicity, if filtering by batch, only show orders from that batch. Repayments shown only on 'ALL' or ignored.
-        // Let's hide repayments if a specific batch is selected, as repayments are usually global to customer.
         let matchBatch = true;
         if (filterBatchId !== 'ALL') {
              if (item.type === 'order') {
@@ -459,7 +476,7 @@ const ManageView: React.FC = () => {
                 </div>
                 {products.map(p => (
                    <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice?.toString() || '0', stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
-                      <div><p className="font-black text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-bold">库存: {p.stockQty}</p></div>
+                      <div><p className="font-black text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-bold">库存: {p.stockQty} / <span className="text-gray-300">{p.initialStockQty}(原)</span></p></div>
                       <Edit2 size={16} className="text-gray-300" />
                    </div>
                 ))}
@@ -509,7 +526,7 @@ const ManageView: React.FC = () => {
      );
   }
 
-  // 5. History View (Standard List) - Enhanced to show Repayments
+  // 5. History View (Standard List)
   if (subView === 'history') {
     return (
       <SubViewShell 
@@ -519,7 +536,7 @@ const ManageView: React.FC = () => {
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
       >
         {combinedHistory.length > 0 ? combinedHistory.map((item: any) => {
-             // --- Render REPAYMENT Record ---
+             // ... Repayment Logic ...
              if (item.type === 'repayment') {
                  const rep = item as Repayment;
                  return (
@@ -541,7 +558,7 @@ const ManageView: React.FC = () => {
                  );
              }
 
-             // --- Render ORDER Record ---
+             // ... Order Logic ...
              const order = item as Order;
              const isCancelled = order.status === OrderStatus.CANCELLED;
              return (
@@ -656,19 +673,30 @@ const ManageView: React.FC = () => {
                            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch?.plateNumber || '未知车次'}</span>
                            {isLowStock && <AlertTriangle size={14} className="text-red-500" />}
                         </div>
-                        <p className="text-xs text-gray-400 font-bold mt-1">
-                           {p.stockQty}件 {p.pricingMode === PricingMode.WEIGHT && `| ${p.stockWeight.toFixed(1)}斤`}
-                        </p>
+                        <div className="flex items-center gap-3 mt-1 text-xs">
+                             <div className="font-bold text-gray-900">
+                                现: {p.stockQty} {p.pricingMode === PricingMode.WEIGHT ? `(${p.stockWeight.toFixed(1)}斤)` : '件'}
+                             </div>
+                             <div className="font-bold text-gray-300">|</div>
+                             <div className="font-bold text-gray-400">
+                                原: {p.initialStockQty}
+                             </div>
+                        </div>
                      </div>
                      <button 
                        onClick={() => { 
                            setAdjustForm({ 
                                id: p.id, 
-                               name: p.name, 
+                               name: p.name,
+                               batchName: batch?.plateNumber || '未知车次',
                                currentQty: p.stockQty, 
                                currentWeight: p.stockWeight,
+                               initialQty: p.initialStockQty,
+                               initialWeight: p.initialStockWeight,
                                actualQty: '',
-                               actualWeight: ''
+                               actualWeight: '',
+                               actualInitialQty: p.initialStockQty.toString(),
+                               actualInitialWeight: p.initialStockWeight.toString()
                            }); 
                            setSubView('adjust_stock'); 
                        }} 
@@ -690,16 +718,24 @@ const ManageView: React.FC = () => {
 
   // 8. Adjust Stock View
   if (subView === 'adjust_stock') {
+    const qtyDiff = (parseFloat(adjustForm.actualQty) || 0) - adjustForm.currentQty;
+    const isLoss = qtyDiff < 0;
+    const isGain = qtyDiff > 0;
+
     return (
         <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-bottom">
             <header className="px-6 py-6 border-b flex items-center justify-between">
                 <h2 className="text-2xl font-black text-gray-800">库存修正</h2>
                 <button onClick={() => setSubView('inventory')} className="p-2 bg-gray-100 rounded-full"><X size={20}/></button>
             </header>
-            <div className="p-8 space-y-8">
-                <div>
-                    <p className="text-sm font-bold text-gray-400 mb-2">当前商品</p>
-                    <h3 className="text-3xl font-black text-gray-900">{adjustForm.name}</h3>
+            <div className="p-8 space-y-8 flex-1 overflow-y-auto">
+                <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                    <div className="flex items-center gap-2 mb-1">
+                        <Truck size={14} className="text-gray-400"/>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest">所属车次</p>
+                    </div>
+                    <h3 className="text-lg font-black text-gray-800">{adjustForm.batchName}</h3>
+                    <p className="text-2xl font-black text-emerald-600 mt-2">{adjustForm.name}</p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-6">
@@ -721,6 +757,14 @@ const ManageView: React.FC = () => {
                     </div>
                 </div>
 
+                {/* 实时损耗计算显示 */}
+                {adjustForm.actualQty !== '' && qtyDiff !== 0 && (
+                    <div className={`p-4 rounded-2xl flex items-center justify-between border ${isLoss ? 'bg-red-50 border-red-100 text-red-600' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                        <span className="font-bold text-sm">{isLoss ? '盘亏 / 损耗' : '盘盈 / 多出'}</span>
+                        <span className="font-black text-xl">{qtyDiff > 0 ? '+' : ''}{qtyDiff} 件</span>
+                    </div>
+                )}
+
                 {/* 如果是按斤计价的，可能也需要修正重量 */}
                 <div className="grid grid-cols-2 gap-6">
                     <div className="bg-gray-50 p-4 rounded-2xl border-2 border-transparent">
@@ -740,16 +784,46 @@ const ManageView: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="pt-8">
+                {/* 修正初始数据区域 */}
+                <div className="bg-white p-4 rounded-2xl border border-gray-100 space-y-4">
+                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-gray-50">
+                        <Edit2 size={14} className="text-gray-400"/>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest">修正原始入库数据</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <p className="text-[10px] font-bold text-gray-400 mb-1">初始件数</p>
+                            <input 
+                                type="number" 
+                                value={adjustForm.actualInitialQty} 
+                                onChange={e => setAdjustForm({...adjustForm, actualInitialQty: e.target.value})}
+                                className="w-full bg-gray-50 p-3 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 ring-emerald-100 border border-gray-100"
+                            />
+                        </div>
+                         <div>
+                            <p className="text-[10px] font-bold text-gray-400 mb-1">初始重量</p>
+                            <input 
+                                type="number" 
+                                value={adjustForm.actualInitialWeight} 
+                                onChange={e => setAdjustForm({...adjustForm, actualInitialWeight: e.target.value})}
+                                className="w-full bg-gray-50 p-3 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 ring-emerald-100 border border-gray-100"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="pt-8 pb-32">
                     <button onClick={handleAdjustStock} className="w-full bg-gray-900 text-white py-6 rounded-3xl font-black text-xl shadow-xl shadow-gray-200 active:scale-95 transition-all">确认修正</button>
-                    <p className="text-center text-xs text-gray-400 mt-4 font-bold">修正后系统将以新数据为准，差异不计入报表</p>
+                    <p className="text-center text-xs text-gray-400 mt-4 font-bold">修正后系统将以新数据为准</p>
                 </div>
             </div>
         </div>
     );
   }
 
-  // 9. Reconcile View
+  // 9. Reconcile View (Code kept same, skipped for brevity as no changes)
+  // ... (Reconcile View & Customers View remain unchanged)
+  // ...
   if (subView === 'reconcile') {
       const filteredReconcileOrders = data.orders.filter(o => {
           if (!o || !o.createdAt) return false;

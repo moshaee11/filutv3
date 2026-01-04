@@ -11,7 +11,7 @@ interface AppContextType {
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
-  adjustStock: (productId: string, newQty: number, newWeight: number) => void;
+  adjustStock: (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number) => void;
   addOrder: (o: Order) => void;
   cancelOrder: (id: string) => void;
   deleteOrder: (id: string) => void;
@@ -81,7 +81,7 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
   });
 };
 
-// --- 核心修复：数据深度清洗 (修复白屏问题 + 重算欠款) ---
+// --- 核心修复：数据深度清洗 (修复白屏问题 + 重算欠款 + 补全初始库存) ---
 const sanitizeData = (incoming: any): AppData => {
   if (!incoming || typeof incoming !== 'object') return initialData;
 
@@ -113,6 +113,9 @@ const sanitizeData = (incoming: any): AppData => {
         ...p,
         stockQty: Number(p.stockQty) || 0,
         stockWeight: Number(p.stockWeight) || 0,
+        // 兼容旧数据：如果没有初始库存，默认等于当前库存
+        initialStockQty: Number(p.initialStockQty) || Number(p.stockQty) || 0,
+        initialStockWeight: Number(p.initialStockWeight) || Number(p.stockWeight) || 0,
         sellingPrice: Number(p.sellingPrice) || 0,
         defaultTare: Number(p.defaultTare) || 0,
         lowStockThreshold: Number(p.lowStockThreshold) || 20
@@ -203,11 +206,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateProduct = (p: Product) => setData(prev => ({ ...prev, products: prev.products.map(old => old.id === p.id ? p : old) }));
   const deleteProduct = (id: string) => setData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
   
-  const adjustStock = (productId: string, newQty: number, newWeight: number) => {
+  const adjustStock = (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number) => {
     setData(prev => ({
       ...prev,
       products: prev.products.map(p => 
-        p.id === productId ? { ...p, stockQty: newQty, stockWeight: newWeight } : p
+        p.id === productId ? { 
+            ...p, 
+            stockQty: newQty, 
+            stockWeight: newWeight,
+            initialStockQty: newInitialQty,
+            initialStockWeight: newInitialWeight
+        } : p
       )
     }));
   };

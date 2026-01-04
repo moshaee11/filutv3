@@ -30,10 +30,12 @@ export interface Product {
   defaultTare: number;
   stockQty: number;
   stockWeight: number;
+  initialStockQty: number; // 新增：初始入库数量
+  initialStockWeight: number; // 新增：初始入库重量
   batchId?: string;
   costPrice?: number;
   sellingPrice?: number;
-  lowStockThreshold?: number; // 新增：库存预警阈值
+  lowStockThreshold?: number;
 }
 
 export interface Batch {
