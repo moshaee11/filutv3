@@ -6,7 +6,8 @@ import {
   CheckCircle2, FileSpreadsheet,
   ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight, Copy, ShieldCheck
 } from 'lucide-react';
-import { downloadJSON, downloadCSV, preciseCalc } from '../utils';
+import { downloadCSV, preciseCalc } from '../utils';
+import * as XLSX from 'xlsx';
 
 const MeView: React.FC = () => {
   const { data, exportData, importData } = useApp();
@@ -88,50 +89,123 @@ const MeView: React.FC = () => {
     }
 
     if (type === 'excel') {
-        performExportExcel();
+        performAdvancedExcelExport();
     }
   };
 
-  const performExportExcel = () => {
+  // 高级 Excel 导出 (仿照截图格式)
+  const performAdvancedExcelExport = () => {
     if (data.orders.length === 0) return alert('暂无订单数据可导出');
+
+    // --- 1. 准备左侧原始数据 (Raw Data) ---
+    // 格式: 日期 | 类别 | 数量(件) | 重量(斤) | 单价(元) | 金额 | 支付方式 | 备注
+    const rawDataRows: any[][] = [['日期', '类别', '数量(件)', '重量(斤)', '单价(元)', '金额', '支付方式', '备注']];
     
-    const headers = [
-        '销售日期', '销售时间', '系统单号', '客户名称', '客户类型', 
-        '应收总额(元)', '实收金额(元)', '本单欠款(元)', '额外杂费', '折扣优惠', 
-        '支付方式', '收款人', '货品详情 (车次-品名-规格-小计)'
+    // 按时间正序排列
+    const sortedOrders = [...data.orders].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    sortedOrders.forEach(o => {
+        const dateObj = new Date(o.createdAt);
+        const dateStr = `${(dateObj.getMonth() + 1).toString().padStart(2,'0')}.${dateObj.getDate().toString().padStart(2,'0')}`; // 11.22
+        const payMap: Record<string, string> = { 'WECHAT': '微信', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '欠款' };
+        
+        o.items.forEach(item => {
+            rawDataRows.push([
+                dateStr,
+                item.productName.split(' ')[0], // 简化品名，如 "大果"
+                item.qty,
+                item.netWeight > 0 ? item.netWeight : '-',
+                item.unitPrice,
+                item.subtotal,
+                payMap[o.paymentMethod] || '其他',
+                o.note || (o.paymentMethod === 'OTHER' ? `${o.customerName}欠` : '')
+            ]);
+        });
+    });
+
+    // --- 2. 准备右侧透视数据 (Pivot Data) ---
+    // 格式: 日期 | 类别 | 求和项:数量 | 求和项:金额
+    const pivotRows: any[][] = [['日期', '类别', '求和项:数量(件)', '求和项:金额']];
+    
+    // 分组聚合逻辑
+    type DaySummary = {
+        dateStr: string;
+        products: Record<string, { qty: number, amount: number }>;
+        totalQty: number;
+        totalAmount: number;
+    };
+    const summaryMap = new Map<string, DaySummary>();
+
+    sortedOrders.forEach(o => {
+        const dateObj = new Date(o.createdAt);
+        const dateStr = `${(dateObj.getMonth() + 1).toString().padStart(2,'0')}.${dateObj.getDate().toString().padStart(2,'0')}`;
+        
+        if (!summaryMap.has(dateStr)) {
+            summaryMap.set(dateStr, { dateStr, products: {}, totalQty: 0, totalAmount: 0 });
+        }
+        const daySummary = summaryMap.get(dateStr)!;
+
+        o.items.forEach(item => {
+            const cat = item.productName.split(' ')[0]; // 简单分类
+            if (!daySummary.products[cat]) {
+                daySummary.products[cat] = { qty: 0, amount: 0 };
+            }
+            daySummary.products[cat].qty += item.qty;
+            daySummary.products[cat].amount += item.subtotal;
+            
+            daySummary.totalQty += item.qty;
+            daySummary.totalAmount += item.subtotal;
+        });
+    });
+
+    let grandTotalQty = 0;
+    let grandTotalAmount = 0;
+
+    // 构建透视表行
+    Array.from(summaryMap.values()).forEach(day => {
+        let isFirstRow = true;
+        Object.entries(day.products).forEach(([cat, val]) => {
+            pivotRows.push([
+                isFirstRow ? day.dateStr : '', // 只在第一行显示日期
+                cat,
+                val.qty,
+                val.amount
+            ]);
+            isFirstRow = false;
+        });
+        // 每日合计
+        pivotRows.push(['', '合计', day.totalQty, day.totalAmount]);
+        grandTotalQty += day.totalQty;
+        grandTotalAmount += day.totalAmount;
+    });
+    // 总计
+    pivotRows.push(['总计', '', grandTotalQty, grandTotalAmount]);
+
+    // --- 3. 合并左右数据 ---
+    // 左侧 8 列 (A-H), 中间空 1 列 (I), 右侧 4 列 (J-M)
+    const finalData: any[][] = [];
+    const maxRows = Math.max(rawDataRows.length, pivotRows.length);
+
+    for (let i = 0; i < maxRows; i++) {
+        const left = rawDataRows[i] || Array(8).fill('');
+        const gap = ['']; 
+        const right = pivotRows[i] || Array(4).fill('');
+        finalData.push([...left, ...gap, ...right]);
+    }
+
+    // --- 4. 生成文件 ---
+    const ws = XLSX.utils.aoa_to_sheet(finalData);
+    
+    // 设置列宽 (大致宽度)
+    ws['!cols'] = [
+        { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, // A-H
+        { wch: 2 }, // I (Empty)
+        { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 } // J-M
     ];
 
-    const sortedOrders = [...data.orders].sort((a, b) => 
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-
-    const rows = sortedOrders.map(o => {
-      const customer = data.customers.find(c => c.id === o.customerId);
-      const custType = customer ? (customer.isGuest ? '散客' : '长期客户') : '未知';
-      const debt = preciseCalc(() => o.totalAmount - o.receivedAmount);
-      const itemsDetail = o.items.map(i => {
-          const weightInfo = i.netWeight > 0 ? `/${i.netWeight}斤` : '';
-          return `${i.productName}【${i.qty}件${weightInfo}】¥${i.subtotal}`;
-      }).join('  |  ');
-
-      const dateObj = new Date(o.createdAt);
-      const paymentMethodMap: Record<string, string> = { 'WECHAT': '微信支付', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '其他' };
-
-      return [
-        dateObj.toLocaleDateString(), dateObj.toLocaleTimeString(), o.orderNo,
-        o.customerName, custType, o.totalAmount, o.receivedAmount, debt,
-        o.extraFee, o.discount, paymentMethodMap[o.paymentMethod] || o.paymentMethod,
-        o.payee, itemsDetail
-      ];
-    });
-    
-    const totalAmount = sortedOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-    const totalReceived = sortedOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
-    const totalDebt = sortedOrders.reduce((sum, o) => sum + (o.totalAmount - o.receivedAmount), 0);
-    const emptyRow = new Array(headers.length).fill('');
-    const summaryRow = ['【累计总计】', `共 ${sortedOrders.length} 单`, '', '', '', totalAmount, totalReceived, totalDebt, '', '', '', '', ''];
-
-    downloadCSV(headers, [...rows, emptyRow, summaryRow], `经营报表_${new Date().toISOString().split('T')[0]}.csv`);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "经营报表");
+    XLSX.writeFile(wb, `经营报表_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const performImport = (content: string) => {
@@ -243,7 +317,7 @@ const MeView: React.FC = () => {
                     <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-500 flex items-center justify-center"><FileSpreadsheet size={20}/></div>
                     <div>
                        <p className="font-black text-gray-800 text-sm">导出经营报表 (Excel)</p>
-                       <p className="text-[10px] text-gray-400 font-bold">生成表格用于打印或查看</p>
+                       <p className="text-[10px] text-gray-400 font-bold">含明细与自动统计</p>
                     </div>
                  </div>
                  <button onClick={() => handleExportClick('excel')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
@@ -265,7 +339,7 @@ const MeView: React.FC = () => {
         </div>
 
         <div className="text-center py-6 space-y-2">
-           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.2</p>
+           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.3</p>
         </div>
       </div>
 
