@@ -117,12 +117,6 @@ const MeView: React.FC = () => {
   const performAdvancedExcelExport = () => {
     if (data.orders.length === 0) return alert('暂无订单数据可导出');
 
-    // 检查 XLSX 是否可用 (因为是 CDN 引入)
-    if (typeof XLSX === 'undefined') {
-        alert('❌ 导出组件加载失败。\n\n请检查网络连接是否正常，因为导出功能需要加载外部组件库。');
-        return;
-    }
-
     // 1. 准备左侧原始数据 (Raw Data)
     // 格式: 日期 | 类别 | 数量(件) | 重量(斤) | 单价(元) | 金额 | 支付方式 | 备注
     const rawDataRows: any[][] = [['日期', '类别', '数量(件)', '重量(斤)', '单价(元)', '金额', '支付方式', '备注']];
@@ -232,7 +226,7 @@ const MeView: React.FC = () => {
         XLSX.writeFile(wb, `经营报表_${new Date().toISOString().split('T')[0]}.xlsx`);
     } catch (e) {
         console.error(e);
-        alert('导出过程出错，请重试');
+        alert('导出失败: Excel 组件加载错误。请确保网络连接正常。');
     }
   };
 
@@ -252,8 +246,7 @@ const MeView: React.FC = () => {
 
     if (confirm('⚠️ 警告：导入数据将覆盖当前所有数据！\n\n确定要继续吗？')) {
        try {
-         // 转为 Base64 模拟旧接口格式，或者重构 store 直接接受 JSON
-         // 这里保持兼容，先编码再传给 store 的 strict validator
+         // 转为 Base64 模拟旧接口格式
          const base64 = btoa(unescape(encodeURIComponent(content)));
          importData(base64);
          
@@ -398,7 +391,7 @@ const MeView: React.FC = () => {
         </div>
 
         <div className="text-center py-6 space-y-2">
-           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.5</p>
+           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.6</p>
         </div>
       </div>
 
