@@ -47,7 +47,41 @@ const initialData: AppData = {
   expenses: []
 };
 
-// --- 核心修复：数据深度清洗 ---
+// --- 辅助函数：全量重算客户欠款 ---
+// 解决导入旧数据或数据不一致时，客户欠款显示不正确的问题
+const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers: Customer[]): Customer[] => {
+  const debtMap = new Map<string, number>();
+
+  // 1. 累加所有有效订单的欠款
+  orders.forEach(o => {
+    if (o.status === OrderStatus.ACTIVE && o.customerId && o.customerId !== 'guest') {
+      const debt = Math.max(0, o.totalAmount - o.discount - o.receivedAmount);
+      // 保持业务规则：单笔欠款小于 30 元时不计入总欠款（视为零头忽略）
+      if (debt >= 30) {
+        const current = debtMap.get(o.customerId) || 0;
+        debtMap.set(o.customerId, current + debt);
+      }
+    }
+  });
+
+  // 2. 减去所有还款记录
+  repayments.forEach(r => {
+    if (r.customerId) {
+      const current = debtMap.get(r.customerId) || 0;
+      // 注意：这里可能会减成负数（如果数据有问题），后续会修正为0
+      debtMap.set(r.customerId, current - r.amount);
+    }
+  });
+
+  // 3. 更新客户列表
+  return customers.map(c => {
+    if (c.isGuest) return c;
+    const calculatedDebt = Math.max(0, debtMap.get(c.id) || 0); // 确保不小于0
+    return { ...c, totalDebt: calculatedDebt };
+  });
+};
+
+// --- 核心修复：数据深度清洗 (修复白屏问题 + 重算欠款) ---
 const sanitizeData = (incoming: any): AppData => {
   if (!incoming || typeof incoming !== 'object') return initialData;
 
@@ -55,6 +89,24 @@ const sanitizeData = (incoming: any): AppData => {
     if (!Array.isArray(arr)) return [];
     return arr.filter(item => item && typeof item === 'object' && validator(item));
   };
+
+  const cleanOrders = safeArray<Order>(incoming.orders, (o) => !!o.id).map((o: any) => ({
+      ...o,
+      items: Array.isArray(o.items) ? o.items : [],
+      totalAmount: Number(o.totalAmount) || 0,
+      receivedAmount: Number(o.receivedAmount) || 0,
+      discount: Number(o.discount) || 0,
+  }));
+
+  const cleanRepayments = safeArray<Repayment>(incoming.repayments, (r) => !!r.id);
+
+  let cleanCustomers = safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
+      ...c,
+      totalDebt: Number(c.totalDebt) || 0
+  }));
+
+  // 关键步骤：根据清洗后的订单和还款，强制重算欠款
+  cleanCustomers = recalculateAllDebts(cleanOrders, cleanRepayments, cleanCustomers);
 
   return {
     products: safeArray<Product>(incoming.products, (p) => !!p.id && !!p.name).map((p: any) => ({
@@ -71,18 +123,9 @@ const sanitizeData = (incoming: any): AppData => {
         cost: Number(b.cost) || 0,
         totalWeight: Number(b.totalWeight) || 0,
     })),
-    orders: safeArray<Order>(incoming.orders, (o) => !!o.id).map((o: any) => ({
-        ...o,
-        items: Array.isArray(o.items) ? o.items : [],
-        totalAmount: Number(o.totalAmount) || 0,
-        receivedAmount: Number(o.receivedAmount) || 0,
-        discount: Number(o.discount) || 0,
-    })),
-    repayments: safeArray<Repayment>(incoming.repayments, (r) => !!r.id),
-    customers: safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
-        ...c,
-        totalDebt: Number(c.totalDebt) || 0
-    })),
+    orders: cleanOrders,
+    repayments: cleanRepayments,
+    customers: cleanCustomers,
     payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
     expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
   };
@@ -202,7 +245,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newProducts = prev.products.map(p => {
         const item = o.items.find(i => i.productId === p.id);
         if (item) {
-          // 修正：使用正确的字段名 qty 和 netWeight
           return {
             ...p,
             stockQty: p.stockQty - item.qty,
@@ -213,12 +255,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       // 2. 更新客户欠款
-      // 修正：不再依赖 PaymentMethod 判断，而是计算 应收 - 实收 > 0 即为欠款
       const debtAmount = Math.max(0, o.totalAmount - o.discount - o.receivedAmount);
       let newCustomers = prev.customers;
       
-      // 只要有欠款且不是散客，就记账
-      if (debtAmount > 0.01 && o.customerId !== 'guest') {
+      const shouldTrackDebt = debtAmount >= 30 && o.customerId !== 'guest';
+
+      if (shouldTrackDebt) {
         newCustomers = prev.customers.map(c => 
           c.id === o.customerId 
             ? { ...c, totalDebt: c.totalDebt + debtAmount } 
@@ -257,7 +299,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
       let newCustomers = prev.customers;
       
-      if (debtAmount > 0.01 && targetOrder.customerId !== 'guest') {
+      const shouldRevertDebt = debtAmount >= 30 && targetOrder.customerId !== 'guest';
+      
+      if (shouldRevertDebt) {
         newCustomers = prev.customers.map(c => 
           c.id === targetOrder.customerId 
             ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
@@ -299,7 +343,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             // 回滚欠款
             const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
-            if (debtAmount > 0.01 && targetOrder.customerId !== 'guest') {
+            const shouldRevertDebt = debtAmount >= 30 && targetOrder.customerId !== 'guest';
+
+            if (shouldRevertDebt) {
                 newCustomers = prev.customers.map(c => 
                     c.id === targetOrder.customerId 
                         ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
@@ -358,10 +404,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       const parsed = JSON.parse(jsonStr);
+      // 调用增强版的数据清洗（含重算欠款）
       const clean = sanitizeData(parsed);
       
       setData(prev => ({ ...initialData, ...clean }));
-      alert('数据导入成功！');
+      alert('数据导入成功！\n客户欠款已根据历史订单自动校准。');
     } catch (e) {
       console.error("Import failed", e);
       alert("导入失败：数据格式错误");

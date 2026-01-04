@@ -6,9 +6,9 @@ import {
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
-  Plus, PlusCircle
+  Plus, PlusCircle, CheckCircle2
 } from 'lucide-react';
-import { PricingMode, OrderStatus, Order, Product, Batch } from '../types';
+import { PricingMode, OrderStatus, Order, Product, Batch, Repayment } from '../types';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -313,19 +313,40 @@ const ManageView: React.FC = () => {
     setFeeForm({ name: '运费', amount: '' });
   };
 
-  // --- MEMOIZED FILTERED LISTS ---
-  const filteredOrders = useMemo(() => {
-    return data.orders
-      .filter(o => {
-         // Defensive check for missing order data
-         if (!o || !o.orderNo || !o.customerName) return false;
-         
-         const matchSearch = o.orderNo.includes(orderSearch) || o.customerName.includes(orderSearch);
-         const matchBatch = filterBatchId === 'ALL' || o.items.some(i => getProductBatchId(i.productId) === filterBatchId);
-         return matchSearch && matchBatch;
-      })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [data.orders, orderSearch, filterBatchId, data.products]);
+  // --- MERGED HISTORY LIST (Orders + Repayments) ---
+  const combinedHistory = useMemo(() => {
+    const orders: any[] = data.orders.map(o => ({ ...o, type: 'order' }));
+    const repayments: any[] = data.repayments.map(r => ({ ...r, type: 'repayment', createdAt: r.date }));
+    
+    // Combine and Sort
+    const combined = [...orders, ...repayments].sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    // Filter
+    return combined.filter(item => {
+        if (!item) return false;
+        // Search Filter (checks OrderNo or CustomerName)
+        const name = item.customerName || '';
+        const no = item.orderNo || '';
+        const matchSearch = name.includes(orderSearch) || no.includes(orderSearch);
+        
+        // Batch Filter (Only applies to orders effectively, repayments don't usually have batchId unless we track it)
+        // For simplicity, if filtering by batch, only show orders from that batch. Repayments shown only on 'ALL' or ignored.
+        // Let's hide repayments if a specific batch is selected, as repayments are usually global to customer.
+        let matchBatch = true;
+        if (filterBatchId !== 'ALL') {
+             if (item.type === 'order') {
+                 const order = item as Order;
+                 matchBatch = order.items.some(i => getProductBatchId(i.productId) === filterBatchId);
+             } else {
+                 matchBatch = false; // Hide repayments when filtering by specific batch
+             }
+        }
+        
+        return matchSearch && matchBatch;
+    });
+  }, [data.orders, data.repayments, orderSearch, filterBatchId, data.products]);
 
   const filteredInventory = useMemo(() => {
     return data.products.filter(p => {
@@ -349,7 +370,7 @@ const ManageView: React.FC = () => {
            <div onClick={() => setSubView('history')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
               <div className="w-12 h-12 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-3"><History size={24} /></div>
               <p className="font-black text-gray-800">单据查询</p>
-              <p className="text-xs text-gray-400 font-bold mt-1">查看所有历史订单</p>
+              <p className="text-xs text-gray-400 font-bold mt-1">订单与还款记录</p>
            </div>
            {/* Reconcile and Customers Views restored here */}
            <div onClick={() => setSubView('reconcile')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
@@ -488,7 +509,7 @@ const ManageView: React.FC = () => {
      );
   }
 
-  // 5. History View (Standard List)
+  // 5. History View (Standard List) - Enhanced to show Repayments
   if (subView === 'history') {
     return (
       <SubViewShell 
@@ -497,8 +518,31 @@ const ManageView: React.FC = () => {
         searchProps={{ value: orderSearch, onChange: setOrderSearch, placeholder: '搜索单号或客户...' }}
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
       >
-        {filteredOrders.length > 0 ? filteredOrders.map(order => {
-             if (!order) return null; // Defensive check
+        {combinedHistory.length > 0 ? combinedHistory.map((item: any) => {
+             // --- Render REPAYMENT Record ---
+             if (item.type === 'repayment') {
+                 const rep = item as Repayment;
+                 return (
+                    <div key={rep.id} className="bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden">
+                       <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
+                       <div className="pl-3">
+                           <div className="flex items-center gap-2 mb-1">
+                               <span className="font-black text-gray-800">{rep.customerName}</span>
+                               <span className="bg-emerald-100 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded font-black">还款</span>
+                           </div>
+                           <p className="text-xs text-gray-400 font-bold">{new Date(rep.date).toLocaleString()}</p>
+                           {rep.note && <p className="text-[10px] text-gray-300 mt-0.5">备注: {rep.note}</p>}
+                       </div>
+                       <div className="text-right">
+                           <p className="font-black text-lg text-emerald-500">+¥{rep.amount}</p>
+                           <p className="text-[10px] text-gray-400 font-bold">已入账</p>
+                       </div>
+                    </div>
+                 );
+             }
+
+             // --- Render ORDER Record ---
+             const order = item as Order;
              const isCancelled = order.status === OrderStatus.CANCELLED;
              return (
                 <div 
@@ -509,15 +553,19 @@ const ManageView: React.FC = () => {
                   <div>
                      <div className="flex items-center gap-2 mb-1">
                         <span className={`font-black ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
-                        {isCancelled && <span className="bg-red-100 text-red-500 text-[10px] px-1 rounded">已作废</span>}
+                        {isCancelled ? (
+                             <span className="bg-red-100 text-red-500 text-[10px] px-1 rounded font-black">已作废</span>
+                        ) : (
+                             <span className="bg-blue-50 text-blue-500 text-[10px] px-1 rounded font-black">开单</span>
+                        )}
                      </div>
                      <p className="text-xs text-gray-400 font-bold mb-1">{order.items ? order.items.length : 0}项商品 - {new Date(order.createdAt).toLocaleTimeString()}</p>
                      <p className="text-[10px] text-gray-300 font-mono">{order.orderNo}</p>
                   </div>
                   <div className="text-right">
                      <p className="font-black text-lg text-gray-900">¥{order.totalAmount}</p>
-                     <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0 ? 'text-red-400' : 'text-emerald-500'}`}>
-                        {order.totalAmount - order.receivedAmount > 0 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
+                     <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0.01 ? 'text-red-400' : 'text-emerald-500'}`}>
+                        {order.totalAmount - order.receivedAmount > 0.01 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
                      </p>
                   </div>
                 </div>
@@ -525,7 +573,7 @@ const ManageView: React.FC = () => {
         }) : (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
                 <Search size={48} strokeWidth={1} className="opacity-20"/>
-                <p className="font-bold text-sm">没有找到相关订单</p>
+                <p className="font-bold text-sm">没有找到相关记录</p>
             </div>
         )}
       </SubViewShell>
