@@ -25,7 +25,6 @@ const MeView: React.FC = () => {
     const initPersistence = async () => {
         if (navigator.storage && navigator.storage.persist) {
             const isPersisted = await navigator.storage.persisted();
-            // 尝试申请权限
             if (!isPersisted) {
                 const granted = await navigator.storage.persist();
                 setIsPersisted(granted);
@@ -37,10 +36,7 @@ const MeView: React.FC = () => {
     initPersistence();
   }, []);
 
-  // 检测是否为微信浏览器
-  const isWeChat = () => {
-    return /MicroMessenger/i.test(navigator.userAgent);
-  };
+  const isWeChat = () => /MicroMessenger/i.test(navigator.userAgent);
 
   const updateBackupTime = () => {
     const now = new Date().toLocaleString();
@@ -48,18 +44,15 @@ const MeView: React.FC = () => {
     setLastBackup(now);
   };
 
-  // 核心功能：打包数据到剪贴板
   const handleCopyDataToClipboard = async () => {
     const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
     const jsonStr = JSON.stringify(backupData);
     
     try {
-        // 优先尝试标准API
         await navigator.clipboard.writeText(jsonStr);
         setCopyStatus('success');
         updateBackupTime();
     } catch (err) {
-        // 降级方案：创建隐藏文本域进行复制
         try {
             const textarea = document.createElement('textarea');
             textarea.value = jsonStr;
@@ -99,7 +92,7 @@ const MeView: React.FC = () => {
         const filename = `水果助手备份_${new Date().toISOString().split('T')[0]}.json`;
         downloadJSON(backupData, filename);
         updateBackupTime();
-        alert('✅ 备份文件已生成！\n\n请将下载的 .json 文件发送给对方，或保存到手机文件管理中。\n(此方式可避免微信字数限制导致的数据丢失)');
+        alert('✅ 备份文件已生成！\n\n请将下载的 .json 文件发送给对方，或保存到手机文件管理中。\n(推荐使用此方式，数据更安全)');
     }
   };
 
@@ -117,15 +110,20 @@ const MeView: React.FC = () => {
         performImport(content);
     };
     reader.readAsText(file);
-    // 重置 input 允许重复选择同一文件
     e.target.value = '';
   };
 
-  // 高级 Excel 导出 (仿照截图格式)
+  // --- 高级 Excel 导出 (仿照截图格式: 左侧明细，右侧透视) ---
   const performAdvancedExcelExport = () => {
     if (data.orders.length === 0) return alert('暂无订单数据可导出');
 
-    // --- 1. 准备左侧原始数据 (Raw Data) ---
+    // 检查 XLSX 是否可用 (因为是 CDN 引入)
+    if (typeof XLSX === 'undefined') {
+        alert('❌ 导出组件加载失败。\n\n请检查网络连接是否正常，因为导出功能需要加载外部组件库。');
+        return;
+    }
+
+    // 1. 准备左侧原始数据 (Raw Data)
     // 格式: 日期 | 类别 | 数量(件) | 重量(斤) | 单价(元) | 金额 | 支付方式 | 备注
     const rawDataRows: any[][] = [['日期', '类别', '数量(件)', '重量(斤)', '单价(元)', '金额', '支付方式', '备注']];
     
@@ -134,7 +132,7 @@ const MeView: React.FC = () => {
 
     sortedOrders.forEach(o => {
         const dateObj = new Date(o.createdAt);
-        const dateStr = `${(dateObj.getMonth() + 1).toString().padStart(2,'0')}.${dateObj.getDate().toString().padStart(2,'0')}`; // 11.22
+        const dateStr = `${(dateObj.getMonth() + 1).toString().padStart(2,'0')}.${dateObj.getDate().toString().padStart(2,'0')}`;
         const payMap: Record<string, string> = { 'WECHAT': '微信', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '欠款' };
         
         o.items.forEach(item => {
@@ -151,11 +149,11 @@ const MeView: React.FC = () => {
         });
     });
 
-    // --- 2. 准备右侧透视数据 (Pivot Data) ---
+    // 2. 准备右侧透视数据 (Pivot Data)
     // 格式: 日期 | 类别 | 求和项:数量 | 求和项:金额
     const pivotRows: any[][] = [['日期', '类别', '求和项:数量(件)', '求和项:金额']];
     
-    // 分组聚合逻辑
+    // 分组聚合
     type DaySummary = {
         dateStr: string;
         products: Record<string, { qty: number, amount: number }>;
@@ -174,7 +172,7 @@ const MeView: React.FC = () => {
         const daySummary = summaryMap.get(dateStr)!;
 
         o.items.forEach(item => {
-            const cat = item.productName.split(' ')[0]; // 简单分类
+            const cat = item.productName.split(' ')[0]; 
             if (!daySummary.products[cat]) {
                 daySummary.products[cat] = { qty: 0, amount: 0 };
             }
@@ -189,12 +187,11 @@ const MeView: React.FC = () => {
     let grandTotalQty = 0;
     let grandTotalAmount = 0;
 
-    // 构建透视表行
     Array.from(summaryMap.values()).forEach(day => {
         let isFirstRow = true;
         Object.entries(day.products).forEach(([cat, val]) => {
             pivotRows.push([
-                isFirstRow ? day.dateStr : '', // 只在第一行显示日期
+                isFirstRow ? day.dateStr : '', 
                 cat,
                 val.qty,
                 val.amount
@@ -209,50 +206,64 @@ const MeView: React.FC = () => {
     // 总计
     pivotRows.push(['总计', '', grandTotalQty, grandTotalAmount]);
 
-    // --- 3. 合并左右数据 ---
-    // 左侧 8 列 (A-H), 中间空 1 列 (I), 右侧 4 列 (J-M)
+    // 3. 合并数据
     const finalData: any[][] = [];
     const maxRows = Math.max(rawDataRows.length, pivotRows.length);
 
     for (let i = 0; i < maxRows; i++) {
         const left = rawDataRows[i] || Array(8).fill('');
-        const gap = ['']; 
+        const gap = ['']; // 空列 I
         const right = pivotRows[i] || Array(4).fill('');
         finalData.push([...left, ...gap, ...right]);
     }
 
-    // --- 4. 生成文件 ---
-    const ws = XLSX.utils.aoa_to_sheet(finalData);
-    
-    // 设置列宽 (大致宽度)
-    ws['!cols'] = [
-        { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, // A-H
-        { wch: 2 }, // I (Empty)
-        { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 } // J-M
-    ];
+    // 4. 生成文件
+    try {
+        const ws = XLSX.utils.aoa_to_sheet(finalData);
+        // 设置大致列宽
+        ws['!cols'] = [
+            { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, // A-H
+            { wch: 2 }, // I (Empty)
+            { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 } // J-M
+        ];
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "经营报表");
-    XLSX.writeFile(wb, `经营报表_${new Date().toISOString().split('T')[0]}.xlsx`);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "经营报表");
+        XLSX.writeFile(wb, `经营报表_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) {
+        console.error(e);
+        alert('导出过程出错，请重试');
+    }
   };
 
   const performImport = (content: string) => {
     if (!content) return;
+    
+    // 安全检查预解析
     try {
-        JSON.parse(content); 
-        if (confirm('⚠️ 警告：导入数据将完全覆盖当前所有数据！\n\n确定要继续吗？')) {
-           try {
-             const base64 = btoa(unescape(encodeURIComponent(content)));
-             importData(base64);
-             alert('✅ 数据恢复成功！');
-             setShowPasteModal(false);
-             setPasteContent('');
-           } catch (err) {
-             alert('❌ 导入失败：数据结构不完整');
-           }
+        const testParse = JSON.parse(content);
+        if (!testParse || typeof testParse !== 'object') {
+             throw new Error("Invalid JSON");
         }
     } catch (e) {
-        alert('❌ 格式错误：数据看起来不完整。\n\n原因：微信/QQ发送长文本时会自动截断（只发了一半）。\n\n✅ 解决方法：请对方使用【导出备份文件】功能发送 .json 文件，然后您使用【选择文件恢复】。');
+         alert('❌ 格式错误：这不是有效的数据文件。\n\n如果是从微信复制的，很可能是因为字数太长被截断了。\n\n✅ 强烈建议：请让对方使用【导出备份文件】功能，发送 .json 文件给您。');
+         return;
+    }
+
+    if (confirm('⚠️ 警告：导入数据将覆盖当前所有数据！\n\n确定要继续吗？')) {
+       try {
+         // 转为 Base64 模拟旧接口格式，或者重构 store 直接接受 JSON
+         // 这里保持兼容，先编码再传给 store 的 strict validator
+         const base64 = btoa(unescape(encodeURIComponent(content)));
+         importData(base64);
+         
+         // 成功后关闭弹窗
+         alert('✅ 数据恢复成功！');
+         setShowPasteModal(false);
+         setPasteContent('');
+       } catch (err: any) {
+         alert('❌ 导入被拒绝：' + (err.message || '数据格式严重错误'));
+       }
     }
   };
 
@@ -365,7 +376,7 @@ const MeView: React.FC = () => {
                     <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-500 flex items-center justify-center"><FileSpreadsheet size={20}/></div>
                     <div>
                        <p className="font-black text-gray-800 text-sm">导出经营报表 (Excel)</p>
-                       <p className="text-[10px] text-gray-400 font-bold">含明细与自动统计</p>
+                       <p className="text-[10px] text-gray-400 font-bold">左侧明细 | 右侧统计</p>
                     </div>
                  </div>
                  <button onClick={() => handleExportClick('excel')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all">导出</button>
@@ -387,7 +398,7 @@ const MeView: React.FC = () => {
         </div>
 
         <div className="text-center py-6 space-y-2">
-           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.4</p>
+           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.5</p>
         </div>
       </div>
 
