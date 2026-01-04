@@ -4,6 +4,10 @@ import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, E
 
 interface AppContextType {
   data: AppData;
+  serverUrl: string;
+  setServerUrl: (url: string) => void;
+  uploadToCloud: () => Promise<void>;
+  downloadFromCloud: () => Promise<void>;
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
@@ -28,6 +32,7 @@ interface AppContextType {
 }
 
 const STORAGE_KEY = 'FRUIT_PRO_DATA_V3';
+const SERVER_URL_KEY = 'FRUIT_PRO_SERVER_URL';
 const CORRUPT_BACKUP_KEY = 'FRUIT_PRO_CORRUPT_BACKUP';
 
 const initialData: AppData = {
@@ -42,44 +47,42 @@ const initialData: AppData = {
   expenses: []
 };
 
-// 辅助函数：深度清洗数据，确保数组内不含 null/undefined，且关键字段存在
-// 关键修复：强制补充缺失的数组字段 (如 extraFees)，防止 UI 读取 length 时崩溃
+// --- 核心修复：数据深度清洗 ---
 const sanitizeData = (incoming: any): AppData => {
+  if (!incoming || typeof incoming !== 'object') return initialData;
+
   const safeArray = <T,>(arr: any, validator: (item: any) => boolean): T[] => {
     if (!Array.isArray(arr)) return [];
     return arr.filter(item => item && typeof item === 'object' && validator(item));
   };
 
   return {
-    // 确保有 id 和 name 才算有效商品
     products: safeArray<Product>(incoming.products, (p) => !!p.id && !!p.name).map((p: any) => ({
         ...p,
         stockQty: Number(p.stockQty) || 0,
         stockWeight: Number(p.stockWeight) || 0,
         sellingPrice: Number(p.sellingPrice) || 0,
+        defaultTare: Number(p.defaultTare) || 0,
+        lowStockThreshold: Number(p.lowStockThreshold) || 20
     })),
-    // 确保有 id 和 plateNumber 才算有效车次
     batches: safeArray<Batch>(incoming.batches, (b) => !!b.id && !!b.plateNumber).map((b: any) => ({
         ...b,
-        // 核心防崩修复：如果 extraFees 丢失，强制补为空数组
         extraFees: Array.isArray(b.extraFees) ? b.extraFees : [], 
         cost: Number(b.cost) || 0,
         totalWeight: Number(b.totalWeight) || 0,
     })),
-    // 确保有 id 才算有效订单
     orders: safeArray<Order>(incoming.orders, (o) => !!o.id).map((o: any) => ({
         ...o,
-        // 核心防崩修复：如果 items 丢失，强制补为空数组
         items: Array.isArray(o.items) ? o.items : [],
         totalAmount: Number(o.totalAmount) || 0,
         receivedAmount: Number(o.receivedAmount) || 0,
+        discount: Number(o.discount) || 0,
     })),
     repayments: safeArray<Repayment>(incoming.repayments, (r) => !!r.id),
     customers: safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
         ...c,
         totalDebt: Number(c.totalDebt) || 0
     })),
-    // 字符串数组过滤空串
     payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
     expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
   };
@@ -88,28 +91,17 @@ const sanitizeData = (incoming: any): AppData => {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [serverUrl, setServerUrlState] = useState(localStorage.getItem(SERVER_URL_KEY) || '');
   const [data, setData] = useState<AppData>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (!saved) return initialData;
-      
       const parsed = JSON.parse(saved);
-      
-      // 第一道防线：如果顶层结构不是对象
-      if (!parsed || typeof parsed !== 'object') {
-          return initialData;
-      }
-
-      // 第二道防线：强力清洗
-      // 哪怕数据损坏，sanitizeData 也会返回一个结构完整的空对象或部分对象，防止白屏
       const cleanData = sanitizeData(parsed);
-
-      // 如果发现清洗后的数据和原始数据差别巨大（例如丢失了所有订单），可能需要备份一下坏数据
-      if (Array.isArray(parsed.orders) && parsed.orders.length > 0 && cleanData.orders.length === 0) {
-          console.warn("Data sanitization removed all orders. Backing up corrupted data.");
+      if (parsed.orders?.length > 0 && cleanData.orders.length === 0) {
+          console.warn("Data sanitization removed orders. Backup created.");
           localStorage.setItem(CORRUPT_BACKUP_KEY, saved);
       }
-      
       return { ...initialData, ...cleanData };
     } catch (e) {
       console.error("Failed to parse local storage", e);
@@ -120,6 +112,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [data]);
+
+  const setServerUrl = (url: string) => {
+    const cleanUrl = url.replace(/\/+$/, '');
+    setServerUrlState(cleanUrl);
+    localStorage.setItem(SERVER_URL_KEY, cleanUrl);
+  };
+
+  const uploadToCloud = async () => {
+    if (!serverUrl) throw new Error('请先配置服务器地址');
+    const payload = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
+    
+    try {
+      const res = await fetch(`${serverUrl}/api/backup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`上传失败: ${res.statusText}`);
+      const result = await res.json();
+      if (!result.success) throw new Error(result.message || '未知错误');
+    } catch (e: any) {
+      console.error(e);
+      throw new Error('连接服务器失败，请检查网络或地址。\n' + e.message);
+    }
+  };
+
+  const downloadFromCloud = async () => {
+    if (!serverUrl) throw new Error('请先配置服务器地址');
+    try {
+      const res = await fetch(`${serverUrl}/api/backup`);
+      if (!res.ok) throw new Error(`下载失败: ${res.statusText}`);
+      const json = await res.json();
+      
+      if (!json || !json.data) throw new Error('服务器返回数据为空');
+      
+      const contentStr = JSON.stringify(json.data);
+      const base64 = btoa(unescape(encodeURIComponent(contentStr)));
+      importData(base64);
+    } catch (e: any) {
+      console.error(e);
+      throw new Error('同步失败：' + e.message);
+    }
+  };
 
   const addProduct = (p: Product) => setData(prev => ({ ...prev, products: [...prev.products, p] }));
   const updateProduct = (p: Product) => setData(prev => ({ ...prev, products: prev.products.map(old => old.id === p.id ? p : old) }));
@@ -157,76 +192,149 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addPayee = (name: string) => { if (!name || data.payees.includes(name)) return; setData(prev => ({ ...prev, payees: [...prev.payees, name] })); };
   const updatePayee = (oldName: string, newName: string) => setData(prev => ({ ...prev, payees: prev.payees.map(p => p === oldName ? newName : p), orders: prev.orders.map(o => o.payee === oldName ? { ...o, payee: newName } : o) }));
   const deletePayee = (name: string) => setData(prev => ({ ...prev, payees: prev.payees.filter(p => p !== name) }));
+
   const addCustomer = (c: Customer) => setData(prev => ({ ...prev, customers: [...prev.customers, c] }));
 
-  const addOrder = (order: Order) => {
+  // --- 订单管理 ---
+  const addOrder = (o: Order) => {
     setData(prev => {
-      const updatedProducts = prev.products.map(p => {
-        const item = order.items.find(i => i.productId === p.id);
-        if (item) return { ...p, stockQty: p.stockQty - item.qty, stockWeight: p.stockWeight - item.netWeight };
-        return p;
-      });
-      const debt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
-      const updatedCustomers = prev.customers.map(c => c.id === order.customerId ? { ...c, totalDebt: c.totalDebt + debt } : c);
-      return { ...prev, products: updatedProducts, orders: [order, ...prev.orders], customers: updatedCustomers };
-    });
-  };
-
-  const cancelOrder = (orderId: string) => {
-    setData(prev => {
-      const order = prev.orders.find(o => o.id === orderId);
-      if (!order || order.status === OrderStatus.CANCELLED) return prev;
-
-      const updatedProducts = prev.products.map(p => {
-        const item = order.items.find(i => i.productId === p.id);
-        if (item) return { ...p, stockQty: p.stockQty + item.qty, stockWeight: p.stockWeight + item.netWeight };
+      // 1. 更新库存
+      const newProducts = prev.products.map(p => {
+        const item = o.items.find(i => i.productId === p.id);
+        if (item) {
+          // 修正：使用正确的字段名 qty 和 netWeight
+          return {
+            ...p,
+            stockQty: p.stockQty - item.qty,
+            stockWeight: p.stockWeight - item.netWeight
+          };
+        }
         return p;
       });
 
-      const debt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
-      const updatedCustomers = prev.customers.map(c => c.id === order.customerId ? { ...c, totalDebt: Math.max(0, c.totalDebt - debt) } : c);
-      const updatedOrders = prev.orders.map(o => o.id === orderId ? { ...o, status: OrderStatus.CANCELLED } : o);
-
-      return { ...prev, products: updatedProducts, orders: updatedOrders, customers: updatedCustomers };
-    });
-  };
-
-  const deleteOrder = (orderId: string) => {
-    setData(prev => {
-      const order = prev.orders.find(o => o.id === orderId);
-      if (!order) return prev;
-
-      let updatedProducts = prev.products;
-      let updatedCustomers = prev.customers;
-
-      if (order.status === OrderStatus.ACTIVE) {
-         updatedProducts = prev.products.map(p => {
-            const item = order.items.find(i => i.productId === p.id);
-            if (item) return { ...p, stockQty: p.stockQty + item.qty, stockWeight: p.stockWeight + item.netWeight };
-            return p;
-         });
-         const addedDebt = Math.max(0, order.totalAmount - order.discount - order.receivedAmount);
-         if (addedDebt > 0) {
-             updatedCustomers = prev.customers.map(c => 
-                 c.id === order.customerId ? { ...c, totalDebt: Math.max(0, c.totalDebt - addedDebt) } : c
-             );
-         }
+      // 2. 更新客户欠款
+      // 修正：不再依赖 PaymentMethod 判断，而是计算 应收 - 实收 > 0 即为欠款
+      const debtAmount = Math.max(0, o.totalAmount - o.discount - o.receivedAmount);
+      let newCustomers = prev.customers;
+      
+      // 只要有欠款且不是散客，就记账
+      if (debtAmount > 0.01 && o.customerId !== 'guest') {
+        newCustomers = prev.customers.map(c => 
+          c.id === o.customerId 
+            ? { ...c, totalDebt: c.totalDebt + debtAmount } 
+            : c
+        );
       }
-      const updatedOrders = prev.orders.filter(o => o.id !== orderId);
-      return { ...prev, products: updatedProducts, orders: updatedOrders, customers: updatedCustomers };
+
+      return {
+        ...prev,
+        products: newProducts,
+        customers: newCustomers,
+        orders: [o, ...prev.orders]
+      };
     });
   };
 
-  const addRepayment = (r: Repayment) => {
-    setData(prev => ({
-      ...prev,
-      repayments: [r, ...prev.repayments],
-      customers: prev.customers.map(c => c.id === r.customerId ? { ...c, totalDebt: Math.max(0, c.totalDebt - r.amount) } : c)
-    }));
+  const cancelOrder = (id: string) => {
+    setData(prev => {
+      const targetOrder = prev.orders.find(o => o.id === id);
+      if (!targetOrder || targetOrder.status === OrderStatus.CANCELLED) return prev;
+
+      // 1. 回滚库存
+      const newProducts = prev.products.map(p => {
+        const item = targetOrder.items.find(i => i.productId === p.id);
+        if (item) {
+          return {
+            ...p,
+            stockQty: p.stockQty + item.qty,
+            stockWeight: p.stockWeight + item.netWeight
+          };
+        }
+        return p;
+      });
+
+      // 2. 回滚客户欠款
+      const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
+      let newCustomers = prev.customers;
+      
+      if (debtAmount > 0.01 && targetOrder.customerId !== 'guest') {
+        newCustomers = prev.customers.map(c => 
+          c.id === targetOrder.customerId 
+            ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
+            : c
+        );
+      }
+
+      return {
+        ...prev,
+        products: newProducts,
+        customers: newCustomers,
+        orders: prev.orders.map(o => o.id === id ? { ...o, status: OrderStatus.CANCELLED } : o)
+      };
+    });
   };
 
-  const addExpense = (e: Expense) => {
+  const deleteOrder = (id: string) => {
     setData(prev => {
+        const targetOrder = prev.orders.find(o => o.id === id);
+        if (!targetOrder) return prev;
+
+        let newProducts = prev.products;
+        let newCustomers = prev.customers;
+
+        // 如果订单是有效状态，删除时需要回滚库存和欠款
+        if (targetOrder.status === OrderStatus.ACTIVE) {
+            // 回滚库存
+            newProducts = prev.products.map(p => {
+                const item = targetOrder.items.find(i => i.productId === p.id);
+                if (item) {
+                    return {
+                        ...p,
+                        stockQty: p.stockQty + item.qty,
+                        stockWeight: p.stockWeight + item.netWeight
+                    };
+                }
+                return p;
+            });
+
+            // 回滚欠款
+            const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
+            if (debtAmount > 0.01 && targetOrder.customerId !== 'guest') {
+                newCustomers = prev.customers.map(c => 
+                    c.id === targetOrder.customerId 
+                        ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
+                        : c
+                );
+            }
+        }
+
+        return {
+            ...prev,
+            products: newProducts,
+            customers: newCustomers,
+            orders: prev.orders.filter(o => o.id !== id)
+        };
+    });
+  };
+
+  // --- 财务管理 ---
+  const addRepayment = (r: Repayment) => {
+    setData(prev => {
+      // 更新客户欠款
+      const newCustomers = prev.customers.map(c => 
+        c.id === r.customerId 
+          ? { ...c, totalDebt: Math.max(0, c.totalDebt - r.amount) } 
+          : c
+      );
+      return {
+        ...prev,
+        customers: newCustomers,
+        repayments: [r, ...prev.repayments]
+      };
+    });
+  };
+
+  const addExpense = (e: Expense) => setData(prev => {
       let updatedBatches = prev.batches;
       if (e.batchId) {
         updatedBatches = prev.batches.map(b => 
@@ -237,34 +345,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
       return { ...prev, expenses: [e, ...prev.expenses], batches: updatedBatches };
-    });
-  };
+  });
 
-  const exportData = () => btoa(unescape(encodeURIComponent(JSON.stringify({ ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' }))));
-  
-  const importData = (base64: string) => {
+  // --- 数据导入导出 ---
+  const importData = (base64Str: string) => {
     try {
-      const decoded = decodeURIComponent(escape(atob(base64)));
-      const json = JSON.parse(decoded);
+      let jsonStr = '';
+      try {
+        jsonStr = decodeURIComponent(escape(atob(base64Str)));
+      } catch (e) {
+        jsonStr = base64Str;
+      }
       
-      if (!json || typeof json !== 'object') throw new Error('数据格式错误');
+      const parsed = JSON.parse(jsonStr);
+      const clean = sanitizeData(parsed);
       
-      // 使用相同的清洗逻辑
-      const cleanData = sanitizeData(json);
-      
-      setData({ ...initialData, ...cleanData });
-    } catch (e) { 
-        console.error("Import failed:", e);
-        throw new Error('导入失败：数据无效'); 
+      setData(prev => ({ ...initialData, ...clean }));
+      alert('数据导入成功！');
+    } catch (e) {
+      console.error("Import failed", e);
+      alert("导入失败：数据格式错误");
     }
   };
 
+  const exportData = () => {
+    const jsonStr = JSON.stringify(data);
+    return btoa(unescape(encodeURIComponent(jsonStr)));
+  };
+
   return (
-    <AppContext.Provider value={{ 
-      data, addProduct, updateProduct, deleteProduct, adjustStock, addOrder, cancelOrder, deleteOrder, 
-      addBatch, updateBatch, closeBatch, deleteBatch, addExtraFee, removeExtraFee, 
-      addPayee, updatePayee, deletePayee, addCustomer, addRepayment, addExpense,
-      importData, exportData 
+    <AppContext.Provider value={{
+      data, serverUrl, setServerUrl, uploadToCloud, downloadFromCloud,
+      addProduct, updateProduct, deleteProduct, adjustStock,
+      addBatch, updateBatch, closeBatch, deleteBatch,
+      addExtraFee, removeExtraFee,
+      addOrder, cancelOrder, deleteOrder,
+      addRepayment, addExpense,
+      addPayee, updatePayee, deletePayee,
+      addCustomer, 
+      importData, exportData
     }}>
       {children}
     </AppContext.Provider>
