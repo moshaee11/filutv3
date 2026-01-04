@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../store';
 import { 
@@ -245,7 +246,7 @@ const ManageView: React.FC = () => {
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
   const selectedProduct = useMemo(() => data.products.find(p => p.id === selectedProductId), [data.products, selectedProductId]);
 
-  const activeBatches = useMemo(() => data.batches.filter(b => !b.isClosed), [data.batches]);
+  const activeBatches = useMemo(() => data.batches.filter(b => b && !b.isClosed), [data.batches]);
   
   // Helper to find which batch a product belongs to
   const getProductBatchId = (productId: string) => {
@@ -316,6 +317,9 @@ const ManageView: React.FC = () => {
   const filteredOrders = useMemo(() => {
     return data.orders
       .filter(o => {
+         // Defensive check for missing order data
+         if (!o || !o.orderNo || !o.customerName) return false;
+         
          const matchSearch = o.orderNo.includes(orderSearch) || o.customerName.includes(orderSearch);
          const matchBatch = filterBatchId === 'ALL' || o.items.some(i => getProductBatchId(i.productId) === filterBatchId);
          return matchSearch && matchBatch;
@@ -325,6 +329,7 @@ const ManageView: React.FC = () => {
 
   const filteredInventory = useMemo(() => {
     return data.products.filter(p => {
+        if (!p || !p.name) return false;
         const matchSearch = p.name.includes(invSearch);
         const matchBatch = filterBatchId === 'ALL' || p.batchId === filterBatchId;
         return matchSearch && matchBatch;
@@ -370,17 +375,20 @@ const ManageView: React.FC = () => {
               <button onClick={() => { setBatchForm({plate:'', cost:'', weight:''}); setSubView('add_batch'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black bg-emerald-50 px-3 py-1.5 rounded-full"><Plus size={14}/> 新车入库</button>
            </div>
            
+           {/* 防御性渲染：确保batch存在且有关键属性 */}
            {activeBatches.map(batch => (
-              <div key={batch.id} onClick={() => { setSelectedBatchId(batch.id); setSubView('batch_detail'); }} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 active:scale-[0.98] transition-all flex justify-between items-center">
-                 <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-500"><Truck size={24} /></div>
-                    <div>
-                       <p className="font-black text-gray-800 text-lg">{batch.plateNumber}</p>
-                       <p className="text-xs text-gray-400 font-bold">{new Date(batch.inboundDate).toLocaleDateString()} 入库</p>
-                    </div>
-                 </div>
-                 <ChevronRight className="text-gray-300" />
-              </div>
+              batch && batch.id ? (
+                <div key={batch.id} onClick={() => { setSelectedBatchId(batch.id); setSubView('batch_detail'); }} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 active:scale-[0.98] transition-all flex justify-between items-center">
+                   <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-500"><Truck size={24} /></div>
+                      <div>
+                         <p className="font-black text-gray-800 text-lg">{batch.plateNumber || '未知车牌'}</p>
+                         <p className="text-xs text-gray-400 font-bold">{batch.inboundDate ? new Date(batch.inboundDate).toLocaleDateString() : '未知日期'} 入库</p>
+                      </div>
+                   </div>
+                   <ChevronRight className="text-gray-300" />
+                </div>
+              ) : null
            ))}
            
            <div onClick={() => alert('请在已结束的车次中查看（功能开发中）')} className="bg-gray-50 p-4 rounded-[2rem] text-center text-gray-400 font-bold text-xs">
@@ -429,7 +437,7 @@ const ManageView: React.FC = () => {
                    <button onClick={() => { setSelectedBatchId(selectedBatch.id); setProductForm({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' }); setSubView('add_product'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black"><PlusCircle size={14}/> 添加商品</button>
                 </div>
                 {products.map(p => (
-                   <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice.toString(), stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
+                   <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice?.toString() || '0', stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
                       <div><p className="font-black text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-bold">库存: {p.stockQty}</p></div>
                       <Edit2 size={16} className="text-gray-300" />
                    </div>
@@ -490,6 +498,7 @@ const ManageView: React.FC = () => {
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
       >
         {filteredOrders.length > 0 ? filteredOrders.map(order => {
+             if (!order) return null; // Defensive check
              const isCancelled = order.status === OrderStatus.CANCELLED;
              return (
                 <div 
@@ -502,7 +511,7 @@ const ManageView: React.FC = () => {
                         <span className={`font-black ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
                         {isCancelled && <span className="bg-red-100 text-red-500 text-[10px] px-1 rounded">已作废</span>}
                      </div>
-                     <p className="text-xs text-gray-400 font-bold mb-1">{order.items.length}项商品 - {new Date(order.createdAt).toLocaleTimeString()}</p>
+                     <p className="text-xs text-gray-400 font-bold mb-1">{order.items ? order.items.length : 0}项商品 - {new Date(order.createdAt).toLocaleTimeString()}</p>
                      <p className="text-[10px] text-gray-300 font-mono">{order.orderNo}</p>
                   </div>
                   <div className="text-right">
@@ -541,7 +550,7 @@ const ManageView: React.FC = () => {
          </header>
          <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-6 relative z-10 pt-10">
             <div className="space-y-4">
-               {selectedOrder.items.map((item, idx) => (
+               {selectedOrder.items && selectedOrder.items.map((item, idx) => (
                   <div key={idx} className="flex justify-between items-center border-b border-gray-50 pb-4 last:border-0">
                      <div>
                         <p className="font-black text-gray-800 text-lg">{item.productName}</p>
@@ -588,14 +597,15 @@ const ManageView: React.FC = () => {
             batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
         >
             {filteredInventory.length > 0 ? filteredInventory.map(p => {
+               if (!p) return null;
                const isLowStock = p.stockQty <= (p.lowStockThreshold || 10);
-               const batch = data.batches.find(b => b.id === p.batchId);
+               const batch = data.batches.find(b => b && b.id === p.batchId);
                return (
                   <div key={p.id} className={`bg-white rounded-2xl p-4 shadow-sm border active:scale-[0.99] transition-all flex justify-between items-center ${isLowStock ? 'border-red-200 bg-red-50/20' : 'border-gray-50'}`}>
                      <div>
                         <div className="flex items-center gap-2">
                            <h3 className="font-black text-gray-800">{p.name}</h3>
-                           <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch?.plateNumber}</span>
+                           <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded font-bold">{batch?.plateNumber || '未知车次'}</span>
                            {isLowStock && <AlertTriangle size={14} className="text-red-500" />}
                         </div>
                         <p className="text-xs text-gray-400 font-bold mt-1">
@@ -694,6 +704,7 @@ const ManageView: React.FC = () => {
   // 9. Reconcile View
   if (subView === 'reconcile') {
       const filteredReconcileOrders = data.orders.filter(o => {
+          if (!o || !o.createdAt) return false;
           const isDate = o.createdAt.startsWith(reconcileDate);
           const isActive = o.status === OrderStatus.ACTIVE;
           let isBatch = true;
@@ -705,6 +716,7 @@ const ManageView: React.FC = () => {
       });
 
       const filteredReconcileExpenses = data.expenses.filter(e => {
+          if (!e || !e.date) return false;
           const isDate = e.date.startsWith(reconcileDate);
           let isBatch = true;
           if (reconcileBatchId !== 'ALL') {
@@ -773,7 +785,7 @@ const ManageView: React.FC = () => {
 
   // 10. Customers View
   if (subView === 'customers') {
-      const debtCustomers = data.customers.filter(c => c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
+      const debtCustomers = data.customers.filter(c => c && c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
       const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);
 
       return (

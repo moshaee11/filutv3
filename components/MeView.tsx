@@ -5,7 +5,7 @@ import {
   Database, Download, Upload, Trash2, 
   CheckCircle2, FileSpreadsheet,
   ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight, Copy, ShieldCheck,
-  FileJson, FileUp, FileDown
+  FileJson, FileUp, FileDown, ExternalLink
 } from 'lucide-react';
 import { downloadCSV, downloadJSON, preciseCalc } from '../utils';
 import * as XLSX from 'xlsx';
@@ -15,6 +15,7 @@ const MeView: React.FC = () => {
   const [lastBackup, setLastBackup] = useState<string>(localStorage.getItem('LAST_BACKUP_TIME') || '从未备份');
   const [showWxTransferModal, setShowWxTransferModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
+  const [showWeChatGuide, setShowWeChatGuide] = useState(false); // 新增：微信引导遮罩
   const [pasteContent, setPasteContent] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success'>('idle');
   const [isPersisted, setIsPersisted] = useState(false);
@@ -72,6 +73,12 @@ const MeView: React.FC = () => {
   };
 
   const handleExportClick = (type: 'excel' | 'copy' | 'file') => {
+    // 微信环境下，点击文件下载，直接拦截并显示引导
+    if ((type === 'excel' || type === 'file') && isWeChat()) {
+        setShowWeChatGuide(true);
+        return;
+    }
+
     if (type === 'copy') {
         if (isWeChat()) {
             setShowWxTransferModal(true);
@@ -391,9 +398,33 @@ const MeView: React.FC = () => {
         </div>
 
         <div className="text-center py-6 space-y-2">
-           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.6</p>
+           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.7</p>
         </div>
       </div>
+
+      {/* 微信导出防拦截引导弹窗 */}
+      {showWeChatGuide && (
+         <div 
+           className="fixed inset-0 z-[1000] bg-black/90 text-white flex flex-col items-center pt-10 px-6 animate-in fade-in"
+           onClick={() => setShowWeChatGuide(false)}
+         >
+             <div className="absolute top-4 right-8 animate-bounce">
+                <ArrowUpRight size={48} className="text-emerald-400 stroke-[3px]" />
+             </div>
+             <div className="mt-16 text-center space-y-6">
+                 <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ExternalLink size={40} className="text-emerald-400"/>
+                 </div>
+                 <h2 className="text-2xl font-black">请在浏览器打开</h2>
+                 <p className="text-gray-300 text-sm font-bold leading-relaxed px-4">
+                     微信无法直接下载文件。<br/>
+                     请点击右上角 <span className="text-white">●●●</span> 菜单<br/>
+                     选择 <span className="text-emerald-400">在浏览器打开</span> 即可下载。
+                 </p>
+                 <button className="mt-8 px-8 py-3 bg-white/10 rounded-full font-bold text-sm border border-white/20">我知道了</button>
+             </div>
+         </div>
+      )}
 
       {/* 微信数据迁移向导 */}
       {showWxTransferModal && (

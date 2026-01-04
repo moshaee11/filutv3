@@ -42,16 +42,46 @@ const initialData: AppData = {
   expenses: []
 };
 
-// 辅助函数：确保数据结构完整
+// 辅助函数：深度清洗数据，确保数组内不含 null/undefined，且关键字段存在
+// 关键修复：强制补充缺失的数组字段 (如 extraFees)，防止 UI 读取 length 时崩溃
 const sanitizeData = (incoming: any): AppData => {
+  const safeArray = <T,>(arr: any, validator: (item: any) => boolean): T[] => {
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(item => item && typeof item === 'object' && validator(item));
+  };
+
   return {
-    products: Array.isArray(incoming.products) ? incoming.products : [],
-    batches: Array.isArray(incoming.batches) ? incoming.batches : [],
-    orders: Array.isArray(incoming.orders) ? incoming.orders : [],
-    repayments: Array.isArray(incoming.repayments) ? incoming.repayments : [],
-    customers: Array.isArray(incoming.customers) ? incoming.customers : initialData.customers,
-    payees: Array.isArray(incoming.payees) ? incoming.payees : initialData.payees,
-    expenses: Array.isArray(incoming.expenses) ? incoming.expenses : [],
+    // 确保有 id 和 name 才算有效商品
+    products: safeArray<Product>(incoming.products, (p) => !!p.id && !!p.name).map((p: any) => ({
+        ...p,
+        stockQty: Number(p.stockQty) || 0,
+        stockWeight: Number(p.stockWeight) || 0,
+        sellingPrice: Number(p.sellingPrice) || 0,
+    })),
+    // 确保有 id 和 plateNumber 才算有效车次
+    batches: safeArray<Batch>(incoming.batches, (b) => !!b.id && !!b.plateNumber).map((b: any) => ({
+        ...b,
+        // 核心防崩修复：如果 extraFees 丢失，强制补为空数组
+        extraFees: Array.isArray(b.extraFees) ? b.extraFees : [], 
+        cost: Number(b.cost) || 0,
+        totalWeight: Number(b.totalWeight) || 0,
+    })),
+    // 确保有 id 才算有效订单
+    orders: safeArray<Order>(incoming.orders, (o) => !!o.id).map((o: any) => ({
+        ...o,
+        // 核心防崩修复：如果 items 丢失，强制补为空数组
+        items: Array.isArray(o.items) ? o.items : [],
+        totalAmount: Number(o.totalAmount) || 0,
+        receivedAmount: Number(o.receivedAmount) || 0,
+    })),
+    repayments: safeArray<Repayment>(incoming.repayments, (r) => !!r.id),
+    customers: safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
+        ...c,
+        totalDebt: Number(c.totalDebt) || 0
+    })),
+    // 字符串数组过滤空串
+    payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
+    expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
   };
 };
 
@@ -65,15 +95,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       const parsed = JSON.parse(saved);
       
-      // 关键修复：如果本地数据缺失关键字段，视为损坏，自动修复
-      if (!Array.isArray(parsed.orders) || !Array.isArray(parsed.products)) {
-         console.warn("Detected corrupted data. Resetting to initial state. Backup saved.");
-         localStorage.setItem(CORRUPT_BACKUP_KEY, saved); // 备份坏数据以防万一
-         return initialData;
+      // 第一道防线：如果顶层结构不是对象
+      if (!parsed || typeof parsed !== 'object') {
+          return initialData;
+      }
+
+      // 第二道防线：强力清洗
+      // 哪怕数据损坏，sanitizeData 也会返回一个结构完整的空对象或部分对象，防止白屏
+      const cleanData = sanitizeData(parsed);
+
+      // 如果发现清洗后的数据和原始数据差别巨大（例如丢失了所有订单），可能需要备份一下坏数据
+      if (Array.isArray(parsed.orders) && parsed.orders.length > 0 && cleanData.orders.length === 0) {
+          console.warn("Data sanitization removed all orders. Backing up corrupted data.");
+          localStorage.setItem(CORRUPT_BACKUP_KEY, saved);
       }
       
-      // 合并以确保字段完整
-      return { ...initialData, ...sanitizeData(parsed) };
+      return { ...initialData, ...cleanData };
     } catch (e) {
       console.error("Failed to parse local storage", e);
       return initialData;
@@ -207,28 +244,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   
   const importData = (base64: string) => {
     try {
-      // 1. 解码
       const decoded = decodeURIComponent(escape(atob(base64)));
       const json = JSON.parse(decoded);
       
-      // 2. 严格校验：必须包含关键数组，否则视为无效数据
       if (!json || typeof json !== 'object') throw new Error('数据格式错误');
-      if (json.type !== 'FRUIT_SYNC') throw new Error('数据类型不匹配');
       
-      // 3. 检查核心字段是否存在，防止白屏
-      if (!Array.isArray(json.orders)) throw new Error('缺失订单数据');
-      if (!Array.isArray(json.products)) throw new Error('缺失商品数据');
-      
-      // 4. 安全合并 (Sanitize)
+      // 使用相同的清洗逻辑
       const cleanData = sanitizeData(json);
       
-      // 5. 更新状态
       setData({ ...initialData, ...cleanData });
-      
     } catch (e) { 
         console.error("Import failed:", e);
-        // 抛出错误让 UI 层捕获并提示用户
-        throw new Error('导入失败：数据格式严重错误或不完整。'); 
+        throw new Error('导入失败：数据无效'); 
     }
   };
 
