@@ -1,12 +1,13 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../store';
 import { 
   Database, Download, Upload, Trash2, 
   CheckCircle2, FileSpreadsheet,
-  ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight, Copy, ShieldCheck
+  ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight, Copy, ShieldCheck,
+  FileJson, FileUp, FileDown
 } from 'lucide-react';
-import { downloadCSV, preciseCalc } from '../utils';
+import { downloadCSV, downloadJSON, preciseCalc } from '../utils';
 import * as XLSX from 'xlsx';
 
 const MeView: React.FC = () => {
@@ -17,6 +18,7 @@ const MeView: React.FC = () => {
   const [pasteContent, setPasteContent] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'success'>('idle');
   const [isPersisted, setIsPersisted] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 初始化：申请持久化存储权限 (防止浏览器自动清理数据)
   useEffect(() => {
@@ -76,7 +78,7 @@ const MeView: React.FC = () => {
     }
   };
 
-  const handleExportClick = (type: 'excel' | 'copy') => {
+  const handleExportClick = (type: 'excel' | 'copy' | 'file') => {
     if (type === 'copy') {
         if (isWeChat()) {
             setShowWxTransferModal(true);
@@ -91,6 +93,32 @@ const MeView: React.FC = () => {
     if (type === 'excel') {
         performAdvancedExcelExport();
     }
+
+    if (type === 'file') {
+        const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
+        const filename = `水果助手备份_${new Date().toISOString().split('T')[0]}.json`;
+        downloadJSON(backupData, filename);
+        updateBackupTime();
+        alert('✅ 备份文件已生成！\n\n请将下载的 .json 文件发送给对方，或保存到手机文件管理中。\n(此方式可避免微信字数限制导致的数据丢失)');
+    }
+  };
+
+  const handleFileImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        const content = ev.target?.result as string;
+        performImport(content);
+    };
+    reader.readAsText(file);
+    // 重置 input 允许重复选择同一文件
+    e.target.value = '';
   };
 
   // 高级 Excel 导出 (仿照截图格式)
@@ -220,11 +248,11 @@ const MeView: React.FC = () => {
              setShowPasteModal(false);
              setPasteContent('');
            } catch (err) {
-             alert('❌ 导入失败：数据格式不正确');
+             alert('❌ 导入失败：数据结构不完整');
            }
         }
     } catch (e) {
-        alert('❌ 格式错误：这不是有效的数据文本');
+        alert('❌ 格式错误：数据看起来不完整。\n\n原因：微信/QQ发送长文本时会自动截断（只发了一半）。\n\n✅ 解决方法：请对方使用【导出备份文件】功能发送 .json 文件，然后您使用【选择文件恢复】。');
     }
   };
 
@@ -239,6 +267,8 @@ const MeView: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#F8FAFC]">
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" />
+
       <header className="px-6 pt-12 pb-6 bg-white shrink-0">
          <div className="flex justify-between items-start">
             <div>
@@ -269,38 +299,56 @@ const MeView: React.FC = () => {
            <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest flex items-center gap-2">
               <Database size={14} /> 数据备份 (防丢失)
            </p>
-           <div className="bg-white rounded-[2rem] p-2 shadow-sm border border-gray-100 overflow-hidden">
-              <div className="p-4 border-b border-gray-50">
-                 <div className="flex items-center gap-3 mb-4">
+           <div className="bg-white rounded-[2rem] p-4 shadow-sm border border-gray-100 overflow-hidden space-y-6">
+              
+              {/* Export Section */}
+              <div className="space-y-3">
+                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center"><Download size={20}/></div>
                     <div>
-                       <p className="font-black text-gray-800 text-sm">一键复制数据</p>
+                       <p className="font-black text-gray-800 text-sm">备份 / 导出</p>
                        <p className="text-[10px] text-gray-400 font-bold">上次备份: {lastBackup}</p>
                     </div>
                  </div>
-                 
-                 <div className="flex gap-2">
+                 <div className="grid grid-cols-2 gap-3">
                      <button 
                         onClick={() => handleExportClick('copy')} 
-                        className="w-full py-3.5 bg-gray-900 text-white rounded-xl text-sm font-black active:scale-95 transition-all flex items-center justify-center gap-2 shadow-lg shadow-gray-200"
+                        className="py-3 bg-blue-50 text-blue-600 rounded-xl text-xs font-black active:scale-95 transition-all flex items-center justify-center gap-1.5 border border-blue-100"
                      >
-                        <Copy size={16} /> 
-                        {copyStatus === 'success' ? '已复制，请粘贴发送' : '复制全部数据 (推荐)'}
+                        <Copy size={16} /> 复制文本
+                     </button>
+                     <button 
+                        onClick={() => handleExportClick('file')} 
+                        className="py-3 bg-gray-900 text-white rounded-xl text-xs font-black active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-gray-200"
+                     >
+                        <FileDown size={16} /> 导出备份文件
                      </button>
                  </div>
               </div>
+              
+              <div className="h-px bg-gray-100 w-full"></div>
 
-              <div className="p-4 flex justify-between items-center bg-gray-50/50">
+              {/* Import Section */}
+              <div className="space-y-3">
                  <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center"><Upload size={20}/></div>
                     <div>
-                       <p className="font-black text-gray-800 text-sm">恢复 / 移入数据</p>
-                       <p className="text-[10px] text-gray-400 font-bold">粘贴数据代码即可恢复</p>
+                       <p className="font-black text-gray-800 text-sm">恢复 / 导入</p>
+                       <p className="text-[10px] text-gray-400 font-bold">请优先使用文件恢复</p>
                     </div>
                  </div>
-                 <div className="flex gap-2">
-                    <button onClick={() => setShowPasteModal(true)} className="w-9 h-9 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center active:scale-95 transition-all">
-                        <ClipboardPaste size={16} />
+                 <div className="grid grid-cols-2 gap-3">
+                    <button 
+                        onClick={() => setShowPasteModal(true)} 
+                        className="py-3 bg-orange-50 text-orange-500 rounded-xl text-xs font-black active:scale-95 transition-all flex items-center justify-center gap-1.5 border border-orange-100"
+                    >
+                        <ClipboardPaste size={16} /> 粘贴文本
+                    </button>
+                    <button 
+                        onClick={handleFileImportClick}
+                        className="py-3 bg-emerald-500 text-white rounded-xl text-xs font-black active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-200"
+                    >
+                        <FileUp size={16} /> 选择文件恢复
                     </button>
                  </div>
               </div>
@@ -339,7 +387,7 @@ const MeView: React.FC = () => {
         </div>
 
         <div className="text-center py-6 space-y-2">
-           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.3</p>
+           <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.4</p>
         </div>
       </div>
 
@@ -357,26 +405,23 @@ const MeView: React.FC = () => {
                 <div>
                     <h3 className="text-3xl font-black mb-2 text-emerald-400">数据已复制！</h3>
                     <p className="text-base font-medium opacity-80 leading-relaxed">
-                        您的所有经营数据已复制到剪贴板。
+                        注意：如果数据量很大，微信可能会截断文本。
                     </p>
                 </div>
                 
                 <div className="space-y-6">
-                    {/* 步骤一：跳转浏览器 */}
                     <div className="bg-white/10 p-5 rounded-2xl border border-white/10">
                          <div className="flex justify-between items-center mb-2">
-                            <span className="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs font-black">下一步</span>
+                            <span className="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs font-black">推荐做法</span>
                         </div>
-                        <p className="text-sm font-bold">点击右上角 <span className="text-xl mx-1">···</span> 选择“发送给朋友”</p>
+                        <p className="text-sm font-bold">请尽量使用“导出备份文件”功能，发送文件最安全。</p>
                     </div>
-
-                    {/* 步骤二：粘贴恢复 */}
+                    
                     <div className="bg-white/5 p-5 rounded-2xl border border-white/5 opacity-80">
                          <div className="flex justify-between items-center mb-2">
-                            <span className="bg-gray-600 text-white px-2 py-0.5 rounded text-xs font-black">最后</span>
+                            <span className="bg-gray-600 text-white px-2 py-0.5 rounded text-xs font-black">强制粘贴</span>
                         </div>
-                        <p className="text-sm font-bold">在聊天框长按 → 粘贴 → 发送。</p>
-                        <p className="text-xs text-gray-400 mt-2">提示：这个长串代码就是您的所有数据。</p>
+                        <p className="text-sm font-bold">如果仍要粘贴文本：在聊天框长按 → 粘贴 → 发送。</p>
                     </div>
                 </div>
 
@@ -409,6 +454,7 @@ const MeView: React.FC = () => {
                 >
                     确认导入
                 </button>
+                <p className="text-[10px] text-red-400 text-center font-bold">如果提示“格式错误”，请改用文件导入</p>
             </div>
         </div>
       )}
