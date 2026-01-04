@@ -561,25 +561,37 @@ const ManageView: React.FC = () => {
              // ... Order Logic ...
              const order = item as Order;
              const isCancelled = order.status === OrderStatus.CANCELLED;
+             
+             // 核心修改：生成商品摘要，直接在列表中展示
+             const summary = order.items.map(i => `${i.productName} x${i.qty}`).join(', ');
+
              return (
                 <div 
                   key={order.id}
                   onClick={() => { setSelectedOrderId(order.id); setSubView('order_detail'); }} 
                   className={`bg-white rounded-2xl p-4 shadow-sm border ${isCancelled ? 'border-red-100 bg-red-50/30 opacity-70' : 'border-gray-50'} active:scale-[0.98] transition-all flex justify-between items-center`}
                 >
-                  <div>
+                  <div className="flex-1 min-w-0 pr-3">
                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`font-black ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
+                        <span className={`font-black text-sm ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
                         {isCancelled ? (
-                             <span className="bg-red-100 text-red-500 text-[10px] px-1 rounded font-black">已作废</span>
+                             <span className="bg-red-100 text-red-500 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">已作废</span>
                         ) : (
-                             <span className="bg-blue-50 text-blue-500 text-[10px] px-1 rounded font-black">开单</span>
+                             <span className="bg-blue-50 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">开单</span>
                         )}
                      </div>
-                     <p className="text-xs text-gray-400 font-bold mb-1">{order.items ? order.items.length : 0}项商品 - {new Date(order.createdAt).toLocaleTimeString()}</p>
-                     <p className="text-[10px] text-gray-300 font-mono">{order.orderNo}</p>
+                     
+                     {/* 核心修改：新增商品明细行，使用 truncate 防止换行错位 */}
+                     <p className="text-xs text-gray-600 font-bold mb-1.5 truncate">
+                        {summary || '无商品明细'}
+                     </p>
+                     
+                     <div className="flex items-center gap-2">
+                        <p className="text-[10px] text-gray-400 font-mono">{new Date(order.createdAt).toLocaleString()}</p>
+                     </div>
                   </div>
-                  <div className="text-right">
+                  
+                  <div className="text-right shrink-0">
                      <p className="font-black text-lg text-gray-900">¥{order.totalAmount}</p>
                      <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0.01 ? 'text-red-400' : 'text-emerald-500'}`}>
                         {order.totalAmount - order.receivedAmount > 0.01 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
