@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
 import { Product, PricingMode, OrderItem, PaymentMethod, Order, Customer, OrderStatus } from '../types';
-import { Search, ShoppingBag, X, ArrowLeft, Check, Delete, PlusCircle, UserPlus, Scissors, FileText, Calendar, Clock, Layers, Truck, AlertTriangle, ChevronDown } from 'lucide-react';
+import { Search, ShoppingBag, X, ArrowLeft, Check, Delete, PlusCircle, UserPlus, Scissors, FileText, Calendar, Clock, Layers, Truck, AlertTriangle, ChevronDown, StickyNote } from 'lucide-react';
 import Keypad from './Keypad';
 import { preciseCalc, generateOrderNo } from '../utils';
 
@@ -33,12 +33,14 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   
   const [isAddingNewCustomer, setIsAddingNewCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState(''); // New: Phone number state
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
 
   // New Features State
   const [orderDate, setOrderDate] = useState(''); // YYYY-MM-DD
   const [orderTime, setOrderTime] = useState(''); // HH:mm
   const [isRounding, setIsRounding] = useState(false); // 抹零开关
+  const [orderNote, setOrderNote] = useState(''); // New: Order Note
   
   // Toast State for Warnings
   const [toast, setToast] = useState<{msg: string, type: 'warning' | 'success'} | null>(null);
@@ -95,6 +97,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     setCustomerSearchQuery('');
     setIsAddingNewCustomer(false);
     setIsRounding(false);
+    setOrderNote('');
     
     // Reset date/time to now
     setQuickDate(0);
@@ -231,13 +234,14 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     const customer: Customer = {
       id: newId,
       name: newCustomerName.trim(),
-      phone: '',
+      phone: newCustomerPhone.trim(), // Save phone
       totalDebt: 0,
       isGuest: false
     };
     addCustomer(customer);
     setSelectedCustomerId(newId);
     setNewCustomerName('');
+    setNewCustomerPhone('');
     setIsAddingNewCustomer(false);
     setShowCustomerModal(false);
   };
@@ -280,7 +284,8 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
       paymentMethod: paymentInfo.method,
       payee: paymentInfo.payee,
       createdAt: validDate.toISOString(),
-      status: OrderStatus.ACTIVE
+      status: OrderStatus.ACTIVE,
+      note: orderNote // Save Note
     };
 
     addOrder(order);
@@ -368,6 +373,21 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
              </div>
           </div>
 
+          <div className="bg-white p-4 rounded-[1.5rem] space-y-3 shadow-sm border border-gray-100">
+            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest px-1">收款人</p>
+            <div className="flex flex-wrap gap-2">
+              {data.payees.map(p => (
+                <button 
+                  key={p} 
+                  onClick={() => setPaymentInfo({...paymentInfo, payee: p})}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all ${paymentInfo.payee === p ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-100 text-gray-500'}`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="bg-white rounded-[1.5rem] p-5 shadow-sm space-y-3 border border-gray-100">
              <div className="flex justify-between items-center mb-1 pb-2 border-b border-gray-50">
                 <h3 className="font-black text-xs text-gray-400 uppercase tracking-widest">购物清单</h3>
@@ -423,19 +443,18 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
              </div>
           </div>
 
-          <div className="bg-white p-4 rounded-[1.5rem] space-y-3 shadow-sm border border-gray-100">
-            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest px-1">收款人</p>
-            <div className="flex flex-wrap gap-2">
-              {data.payees.map(p => (
-                <button 
-                  key={p} 
-                  onClick={() => setPaymentInfo({...paymentInfo, payee: p})}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all ${paymentInfo.payee === p ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-100 text-gray-500'}`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
+          {/* New: Order Note Field */}
+          <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100 space-y-2">
+             <div className="flex items-center gap-2 px-2">
+                 <StickyNote size={14} className="text-gray-400"/>
+                 <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">订单备注 (选填)</p>
+             </div>
+             <input 
+                value={orderNote}
+                onChange={(e) => setOrderNote(e.target.value)}
+                placeholder="例如：欠3个框子、送货上门..."
+                className="w-full bg-gray-50 h-12 px-4 rounded-xl text-sm font-bold text-gray-700 placeholder-gray-400 outline-none focus:ring-2 ring-gray-100 transition-all"
+             />
           </div>
         </main>
 
@@ -519,8 +538,15 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
                 </>
               ) : (
                 <div className="space-y-6 py-4 animate-in fade-in">
-                  <div className="space-y-2"><label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">客户姓名</label><input autoFocus value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="输入新客户姓名" className="w-full bg-gray-50 p-5 rounded-2xl text-xl font-black outline-none border-2 border-emerald-100 focus:border-emerald-500 transition-all" /></div>
-                  <div className="flex gap-3"><button onClick={() => setIsAddingNewCustomer(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black">取消</button><button onClick={handleAddNewCustomer} className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-black shadow-lg shadow-emerald-100">确认添加并选择</button></div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">客户姓名</label>
+                    <input autoFocus value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="输入新客户姓名" className="w-full bg-gray-50 p-5 rounded-2xl text-xl font-black outline-none border-2 border-emerald-100 focus:border-emerald-500 transition-all" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">手机号码 (选填)</label>
+                    <input value={newCustomerPhone} onChange={e => setNewCustomerPhone(e.target.value)} type="tel" placeholder="方便后续联系" className="w-full bg-gray-50 p-5 rounded-2xl text-lg font-bold outline-none border-2 border-transparent focus:border-blue-200 transition-all" />
+                  </div>
+                  <div className="flex gap-3 pt-4"><button onClick={() => setIsAddingNewCustomer(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black">取消</button><button onClick={handleAddNewCustomer} className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-black shadow-lg shadow-emerald-100">确认添加并选择</button></div>
                 </div>
               )}
             </div>

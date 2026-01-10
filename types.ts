@@ -83,7 +83,8 @@ export interface Repayment {
   customerName: string;
   amount: number;
   date: string;
-  payee: string;
+  payee: string; // 收款人
+  paymentMethod?: PaymentMethod; // 新增：收款方式
   note?: string;
 }
 

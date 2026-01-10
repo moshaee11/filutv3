@@ -6,7 +6,7 @@ import {
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
-  Plus, PlusCircle, CheckCircle2
+  Plus, PlusCircle, CheckCircle2, UserCog
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch, Repayment } from '../types';
 
@@ -206,7 +206,7 @@ const ProductFormFields: React.FC<{
 );
 
 const ManageView: React.FC = () => {
-  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product';
+  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees';
   const [subView, setSubView] = useState<ViewState>('main');
   
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
@@ -222,6 +222,7 @@ const ManageView: React.FC = () => {
   const [invSearch, setInvSearch] = useState('');
   const [showFeeModal, setShowFeeModal] = useState(false);
   const [feeForm, setFeeForm] = useState({ name: '运费', amount: '' });
+  const [newPayeeName, setNewPayeeName] = useState('');
 
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
   const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' });
@@ -245,7 +246,7 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, deletePayee } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -332,6 +333,12 @@ const ManageView: React.FC = () => {
     setFeeForm({ name: '运费', amount: '' });
   };
 
+  const handleAddPayee = () => {
+    if (!newPayeeName.trim()) return alert('请输入名字');
+    addPayee(newPayeeName.trim());
+    setNewPayeeName('');
+  };
+
   // --- MERGED HISTORY LIST (Orders + Repayments) ---
   const combinedHistory = useMemo(() => {
     const orders: any[] = data.orders.map(o => ({ ...o, type: 'order' }));
@@ -405,6 +412,13 @@ const ManageView: React.FC = () => {
               <p className="font-black text-gray-800">库存盘点</p>
               <p className="text-xs text-gray-400 font-bold mt-1">修正库存 / 报损</p>
            </div>
+           <div onClick={() => setSubView('payees')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all col-span-2 flex items-center gap-4">
+               <div className="w-12 h-12 bg-orange-50 text-orange-500 rounded-2xl flex items-center justify-center shrink-0"><UserCog size={24} /></div>
+               <div>
+                    <p className="font-black text-gray-800">收款人/员工管理</p>
+                    <p className="text-xs text-gray-400 font-bold mt-1">配置开单与收款时的可选人员</p>
+               </div>
+           </div>
         </div>
 
         <div className="space-y-4">
@@ -435,6 +449,42 @@ const ManageView: React.FC = () => {
         </div>
       </div>
     );
+  }
+
+  // Payees View
+  if (subView === 'payees') {
+      return (
+          <SubViewShell title="收款人管理" onBack={() => setSubView('main')}>
+              <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 space-y-4">
+                  <h3 className="font-black text-gray-800 text-sm">添加新人员</h3>
+                  <div className="flex gap-3">
+                      <input 
+                        value={newPayeeName}
+                        onChange={e => setNewPayeeName(e.target.value)}
+                        placeholder="输入名字，如：李四"
+                        className="flex-1 bg-gray-50 px-4 py-3 rounded-xl font-bold text-sm outline-none focus:bg-white focus:ring-2 ring-emerald-100 transition-all"
+                      />
+                      <button onClick={handleAddPayee} className="bg-emerald-500 text-white px-6 rounded-xl font-black text-sm active:scale-95 transition-all shadow-md shadow-emerald-200">添加</button>
+                  </div>
+              </div>
+              
+              <div className="space-y-3">
+                  <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest">现有人员列表</p>
+                  {data.payees.map(p => (
+                      <div key={p} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
+                          <span className="font-black text-gray-800">{p}</span>
+                          <button 
+                            onClick={() => { if(confirm(`确定要删除“${p}”吗？`)) deletePayee(p); }}
+                            className="text-red-400 p-2 bg-red-50 rounded-xl active:bg-red-100 transition-colors"
+                          >
+                              <Trash2 size={16} />
+                          </button>
+                      </div>
+                  ))}
+                  {data.payees.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">暂无人员，请添加</div>}
+              </div>
+          </SubViewShell>
+      );
   }
 
   // 2. Add/Edit Batch Modal
@@ -539,6 +589,9 @@ const ManageView: React.FC = () => {
              // ... Repayment Logic ...
              if (item.type === 'repayment') {
                  const rep = item as Repayment;
+                 const payMethodMap: Record<string, string> = { 'WECHAT': '微信', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '其他' };
+                 const methodLabel = rep.paymentMethod ? payMethodMap[rep.paymentMethod] : '现金';
+
                  return (
                     <div key={rep.id} className="bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden">
                        <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
@@ -547,7 +600,10 @@ const ManageView: React.FC = () => {
                                <span className="font-black text-gray-800">{rep.customerName}</span>
                                <span className="bg-emerald-100 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded font-black">还款</span>
                            </div>
-                           <p className="text-xs text-gray-400 font-bold">{new Date(rep.date).toLocaleString()}</p>
+                           <p className="text-xs text-gray-600 font-bold mb-1">
+                             {rep.payee ? `${rep.payee}收 - ${methodLabel}` : '未记录经手人'}
+                           </p>
+                           <p className="text-[10px] text-gray-400 font-mono">{new Date(rep.date).toLocaleString()}</p>
                            {rep.note && <p className="text-[10px] text-gray-300 mt-0.5">备注: {rep.note}</p>}
                        </div>
                        <div className="text-right">
@@ -561,8 +617,6 @@ const ManageView: React.FC = () => {
              // ... Order Logic ...
              const order = item as Order;
              const isCancelled = order.status === OrderStatus.CANCELLED;
-             
-             // 核心修改：生成商品摘要，直接在列表中展示
              const summary = order.items.map(i => `${i.productName} x${i.qty}`).join(', ');
 
              return (
@@ -581,13 +635,14 @@ const ManageView: React.FC = () => {
                         )}
                      </div>
                      
-                     {/* 核心修改：新增商品明细行，使用 truncate 防止换行错位 */}
                      <p className="text-xs text-gray-600 font-bold mb-1.5 truncate">
                         {summary || '无商品明细'}
                      </p>
                      
-                     <div className="flex items-center gap-2">
-                        <p className="text-[10px] text-gray-400 font-mono">{new Date(order.createdAt).toLocaleString()}</p>
+                     <div className="flex items-center gap-2 text-[10px] text-gray-400 font-bold">
+                        <span>{order.payee ? `${order.payee}开单` : '无经手人'}</span>
+                        <span className="w-0.5 h-2 bg-gray-300"></span>
+                        <span className="font-mono">{new Date(order.createdAt).toLocaleString()}</span>
                      </div>
                   </div>
                   
@@ -640,11 +695,18 @@ const ManageView: React.FC = () => {
             
             <div className="bg-gray-50 p-6 rounded-2xl space-y-3">
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">客户</span><span className="font-black">{selectedOrder.customerName}</span></div>
+               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">开单人</span><span className="font-black">{selectedOrder.payee || '未记录'}</span></div>
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">支付方式</span><span className="font-black">{selectedOrder.paymentMethod}</span></div>
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">实收</span><span className="font-black text-emerald-600">¥{selectedOrder.receivedAmount}</span></div>
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">优惠/抹零</span><span className="font-black text-gray-800">¥{selectedOrder.discount}</span></div>
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">时间</span><span className="font-black text-gray-800">{new Date(selectedOrder.createdAt).toLocaleString()}</span></div>
                <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">单号</span><span className="font-black text-gray-400 font-mono text-xs">{selectedOrder.orderNo}</span></div>
+               {selectedOrder.note && (
+                   <div className="pt-2 border-t border-gray-200 mt-2">
+                       <p className="text-xs text-gray-400 font-bold mb-1">备注</p>
+                       <p className="text-sm font-black text-gray-700">{selectedOrder.note}</p>
+                   </div>
+               )}
             </div>
 
             {!isCancelled && (

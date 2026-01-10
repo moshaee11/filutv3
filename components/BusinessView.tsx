@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
 import { preciseCalc } from '../utils';
@@ -196,7 +197,7 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
        {/* Controls */}
        <div className="bg-white px-4 py-4 border-b border-gray-100 space-y-3 z-10">
           
-          {/* Batch Selector in Pivot Table */}
+          {/* Batch Filter */}
           <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
              <button 
                 onClick={() => setSelectedBatchId('ALL')}
@@ -265,11 +266,12 @@ const BusinessView: React.FC = () => {
 
   // Filter Data Logic
   const filteredData = useMemo(() => {
-    if (!dateRange.start || !dateRange.end) return { orders: [], expenses: [] };
+    if (!dateRange.start || !dateRange.end) return { orders: [], expenses: [], repayments: [] };
 
     const startMs = new Date(dateRange.start + 'T00:00:00').getTime();
     const endMs = new Date(dateRange.end + 'T23:59:59').getTime();
 
+    // 1. Orders
     const orders = data.orders.filter(o => {
       const oTime = new Date(o.createdAt).getTime();
       const inTime = oTime >= startMs && oTime <= endMs;
@@ -284,6 +286,7 @@ const BusinessView: React.FC = () => {
       return inTime && isActive && inBatch;
     });
 
+    // 2. Expenses
     const expenses = data.expenses.filter(e => {
        const eTime = new Date(e.date).getTime();
        const inTime = eTime >= startMs && eTime <= endMs;
@@ -291,14 +294,26 @@ const BusinessView: React.FC = () => {
        return inTime && inBatch;
     });
 
-    return { orders, expenses };
+    // 3. Repayments (New: Filter repayments within range)
+    const repayments = data.repayments.filter(r => {
+        const rTime = new Date(r.date).getTime();
+        const inTime = rTime >= startMs && rTime <= endMs;
+        // Repayments usually don't belong to a batch, so we only filter by time if batch is ALL
+        // Or if we want strict batch accounting, we ignore repayments when a batch is selected?
+        // Let's include them for now if 'ALL', but if specific batch is selected, maybe hide them or show carefully?
+        // For simplicity: Show all repayments if ALL batch, hide if specific batch (hard to link repayment to batch)
+        const inBatch = filterBatchId === 'ALL'; 
+        return inTime && inBatch;
+    });
+
+    return { orders, expenses, repayments };
   }, [data, dateRange, filterBatchId]);
 
 
   const stats = useMemo(() => {
-    const { orders, expenses } = filteredData;
+    const { orders, expenses, repayments } = filteredData;
     
-    // Revenue Calculation (修正：扣除折扣)
+    // Revenue Calculation (成交额)
     let revenue = 0;
     if (filterBatchId === 'ALL') {
         revenue = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
@@ -321,16 +336,30 @@ const BusinessView: React.FC = () => {
     }
 
     const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
-    const wechat = orders.filter(o => o.paymentMethod === PaymentMethod.WECHAT).reduce((sum, o) => sum + o.receivedAmount, 0);
-    const alipay = orders.filter(o => o.paymentMethod === PaymentMethod.ALIPAY).reduce((sum, o) => sum + o.receivedAmount, 0);
-    const cash = orders.filter(o => o.paymentMethod === PaymentMethod.CASH).reduce((sum, o) => sum + o.receivedAmount, 0);
+    const totalRepaid = repayments.reduce((sum, r) => sum + r.amount, 0);
+
+    // Summing up cash flow by channel (Order Received + Repayment Received)
+    const sumChannel = (method: PaymentMethod) => {
+        const fromOrders = orders.filter(o => o.paymentMethod === method).reduce((sum, o) => sum + o.receivedAmount, 0);
+        const fromRepayments = repayments.filter(r => r.paymentMethod === method).reduce((sum, r) => sum + r.amount, 0);
+        return fromOrders + fromRepayments;
+    };
+
+    const wechat = sumChannel(PaymentMethod.WECHAT);
+    const alipay = sumChannel(PaymentMethod.ALIPAY);
+    const cash = sumChannel(PaymentMethod.CASH);
     
-    // 欠款 = 成交价 - 实收
-    const debt = orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0);
+    // 欠款增加 (只看新单欠款)
+    const debtIncrease = orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0);
     
-    const totalReceived = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    // 实际总入账 = 订单实收 + 还款
+    const totalOrderReceived = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    const totalReceived = totalOrderReceived + totalRepaid;
+    
+    // 结余
     const balance = totalReceived - totalExpense;
 
+    // Chart Data
     const productSalesMap = new Map<string, number>();
     orders.forEach(order => {
       order.items.forEach(item => {
@@ -346,7 +375,7 @@ const BusinessView: React.FC = () => {
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 5);
 
-    return { wechat, alipay, cash, revenue, debt, expenses: totalExpense, balance, chartData };
+    return { wechat, alipay, cash, revenue, debtIncrease, expenses: totalExpense, balance, chartData, totalRepaid };
   }, [filteredData, filterBatchId, data.products]);
 
   const handleExport = () => {
@@ -421,7 +450,7 @@ const BusinessView: React.FC = () => {
         <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
           <div className="flex items-center gap-2 mb-4 text-slate-800">
             <CreditCard size={18} className="text-blue-500" />
-            <h3 className="font-black text-sm">收款账户明细 (筛选范围内)</h3>
+            <h3 className="font-black text-sm">收款账户明细 (含回款)</h3>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-[#F0FDF4] p-4 rounded-2xl text-center border border-emerald-50">
@@ -458,9 +487,10 @@ const BusinessView: React.FC = () => {
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-1">
             <div className="flex items-center gap-1.5 text-slate-400 mb-1">
               <Wallet size={14} />
-              <p className="text-[10px] font-black uppercase tracking-widest">欠款增加</p>
+              <p className="text-[10px] font-black uppercase tracking-widest">实收结余</p>
             </div>
-            <p className="text-3xl font-black text-red-500 tracking-tighter">¥{stats.debt.toLocaleString()}</p>
+            {/* 这里的结余包含了 回款 - 支出 */}
+            <p className="text-3xl font-black text-blue-600 tracking-tighter">¥{stats.balance.toLocaleString()}</p>
           </div>
 
           <div 
@@ -478,12 +508,23 @@ const BusinessView: React.FC = () => {
             <div className="absolute -right-4 -bottom-4 w-16 h-16 bg-orange-50 rounded-full group-hover:scale-150 transition-transform duration-500"></div>
           </div>
 
-          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-1">
+          <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 space-y-2">
             <div className="flex items-center gap-1.5 text-slate-400 mb-1">
               <TrendingUp size={14} />
-              <p className="text-[10px] font-black uppercase tracking-widest">实收结余</p>
+              <p className="text-[10px] font-black uppercase tracking-widest">回款与欠款</p>
             </div>
-            <p className="text-3xl font-black text-blue-600 tracking-tighter">¥{stats.balance.toLocaleString()}</p>
+            <div className="flex justify-between items-end">
+                <div>
+                    <p className="text-[10px] font-bold text-emerald-500">收回 ¥{stats.totalRepaid.toLocaleString()}</p>
+                </div>
+                <div className="text-right">
+                    <p className="text-[10px] font-bold text-red-400">新增 ¥{stats.debtIncrease.toLocaleString()}</p>
+                </div>
+            </div>
+            <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden flex">
+                <div className="bg-emerald-400 h-full" style={{ width: `${stats.totalRepaid / (stats.totalRepaid + stats.debtIncrease + 1) * 100}%` }}></div>
+                <div className="bg-red-300 h-full" style={{ width: `${stats.debtIncrease / (stats.totalRepaid + stats.debtIncrease + 1) * 100}%` }}></div>
+            </div>
           </div>
         </div>
 

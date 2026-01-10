@@ -1,6 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus } from './types';
+import { preciseCalc } from './utils';
 
 interface AppContextType {
   data: AppData;
@@ -55,11 +56,12 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
   // 1. 累加所有有效订单的欠款
   orders.forEach(o => {
     if (o.status === OrderStatus.ACTIVE && o.customerId && o.customerId !== 'guest') {
-      const debt = Math.max(0, o.totalAmount - o.discount - o.receivedAmount);
-      // 保持业务规则：单笔欠款小于 30 元时不计入总欠款（视为零头忽略）
-      if (debt >= 30) {
+      // 优化：使用高精度计算，并移除 30 元门槛，确保所有欠款都被记录
+      const debt = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
+      
+      if (debt > 0) {
         const current = debtMap.get(o.customerId) || 0;
-        debtMap.set(o.customerId, current + debt);
+        debtMap.set(o.customerId, preciseCalc(() => current + debt));
       }
     }
   });
@@ -69,7 +71,7 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
     if (r.customerId) {
       const current = debtMap.get(r.customerId) || 0;
       // 注意：这里可能会减成负数（如果数据有问题），后续会修正为0
-      debtMap.set(r.customerId, current - r.amount);
+      debtMap.set(r.customerId, preciseCalc(() => current - r.amount));
     }
   });
 
@@ -98,7 +100,10 @@ const sanitizeData = (incoming: any): AppData => {
       discount: Number(o.discount) || 0,
   }));
 
-  const cleanRepayments = safeArray<Repayment>(incoming.repayments, (r) => !!r.id);
+  const cleanRepayments = safeArray<Repayment>(incoming.repayments, (r) => !!r.id).map((r: any) => ({
+      ...r,
+      paymentMethod: r.paymentMethod || PaymentMethod.CASH // 兼容旧数据
+  }));
 
   let cleanCustomers = safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
       ...c,
@@ -263,16 +268,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      // 2. 更新客户欠款
-      const debtAmount = Math.max(0, o.totalAmount - o.discount - o.receivedAmount);
+      // 2. 更新客户欠款 (优化：高精度计算 + 移除 30 元门槛)
+      const debtAmount = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
       let newCustomers = prev.customers;
       
-      const shouldTrackDebt = debtAmount >= 30 && o.customerId !== 'guest';
+      const shouldTrackDebt = debtAmount > 0 && o.customerId !== 'guest';
 
       if (shouldTrackDebt) {
         newCustomers = prev.customers.map(c => 
           c.id === o.customerId 
-            ? { ...c, totalDebt: c.totalDebt + debtAmount } 
+            ? { ...c, totalDebt: preciseCalc(() => c.totalDebt + debtAmount) } 
             : c
         );
       }
@@ -305,15 +310,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       // 2. 回滚客户欠款
-      const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
+      const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
       let newCustomers = prev.customers;
       
-      const shouldRevertDebt = debtAmount >= 30 && targetOrder.customerId !== 'guest';
+      const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
       
       if (shouldRevertDebt) {
         newCustomers = prev.customers.map(c => 
           c.id === targetOrder.customerId 
-            ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
+            ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - debtAmount)) } 
             : c
         );
       }
@@ -351,13 +356,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
 
             // 回滚欠款
-            const debtAmount = Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount);
-            const shouldRevertDebt = debtAmount >= 30 && targetOrder.customerId !== 'guest';
+            const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
+            const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
 
             if (shouldRevertDebt) {
                 newCustomers = prev.customers.map(c => 
                     c.id === targetOrder.customerId 
-                        ? { ...c, totalDebt: Math.max(0, c.totalDebt - debtAmount) } 
+                        ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - debtAmount)) } 
                         : c
                 );
             }
@@ -378,7 +383,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 更新客户欠款
       const newCustomers = prev.customers.map(c => 
         c.id === r.customerId 
-          ? { ...c, totalDebt: Math.max(0, c.totalDebt - r.amount) } 
+          ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - r.amount)) } 
           : c
       );
       return {

@@ -4,9 +4,9 @@ import { useApp } from '../store';
 import { 
   Wallet, Send, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, X, Plus, CheckCircle2,
-  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight, Copy, Share
+  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight, Copy, Share, User, Banknote
 } from 'lucide-react';
-import { OrderStatus } from '../types';
+import { OrderStatus, PaymentMethod, Customer } from '../types';
 
 const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) => {
   const { data, importData } = useApp();
@@ -63,19 +63,32 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
   const stats = useMemo(() => {
     const now = new Date();
     const startOfToday = new Date(now.setHours(0,0,0,0)).getTime();
+    
+    // 1. 今日有效订单
     const orders = data.orders.filter(o => o.status === OrderStatus.ACTIVE && new Date(o.createdAt).getTime() >= startOfToday);
+    
+    // 2. 今日还款记录
     const repayments = data.repayments.filter(r => new Date(r.date).getTime() >= startOfToday);
     
-    // 修正：营收总额应该是 (总额 - 优惠/抹零)。
-    // 之前是 sum(o.totalAmount)，导致抹零金额也被算作“营收”
+    // 3. 计算逻辑优化
+    // 今日营收 (只看新单成交)
     const orderAmount = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
-    const receivedAmount = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
     
-    // 欠款增加量 = 实际成交价 - 实收
-    const debtAmount = orderAmount - receivedAmount;
+    // 订单实收
+    const orderReceived = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    
+    // 还款实收
+    const repaymentReceived = repayments.reduce((sum, r) => sum + r.amount, 0);
+    
+    // 今日总入账 (现金流) = 订单实收 + 还款实收
+    const totalReceived = orderReceived + repaymentReceived;
+    
+    // 欠款增加量 = 实际成交价 - 订单实收
+    const debtAmount = orderAmount - orderReceived;
     
     const activeBatches = data.batches.filter(b => !b.isClosed).length;
-    return { orderAmount, receivedAmount, debtAmount, activeBatches };
+    
+    return { orderAmount, totalReceived, repaymentReceived, debtAmount, activeBatches };
   }, [data]);
 
   const handleSyncImport = () => {
@@ -189,7 +202,19 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
         <div className="flex justify-between items-center px-2"><h3 className="font-black text-lg text-gray-800 tracking-tight">今日经营动态</h3></div>
         <div className="grid grid-cols-2 gap-3">
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日营收 (实成交)</p><p className="text-2xl font-black text-gray-900">¥{stats.orderAmount.toLocaleString()}</p></div>
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日实收</p><p className="text-2xl font-black text-emerald-500">¥{stats.receivedAmount.toLocaleString()}</p></div>
+           
+           {/* 今日实收卡片优化：显示回款构成 */}
+           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-1 relative overflow-hidden">
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日实收 (总入账)</p>
+                <p className="text-2xl font-black text-emerald-500">¥{stats.totalReceived.toLocaleString()}</p>
+                {stats.repaymentReceived > 0 && (
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600/70 bg-emerald-50 px-2 py-0.5 rounded-md w-fit">
+                        <ArrowDownCircle size={10} />
+                        含回款 ¥{stats.repaymentReceived.toLocaleString()}
+                    </div>
+                )}
+           </div>
+           
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">新增挂账</p><p className="text-2xl font-black text-red-500">¥{stats.debtAmount.toLocaleString()}</p></div>
            <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">在售车辆</p><p className="text-2xl font-black text-blue-500">{stats.activeBatches} 台</p></div>
         </div>
@@ -253,7 +278,7 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
   );
 };
 
-// QuickModal 组件保持不变
+// QuickModal 组件
 const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void }> = ({ type, onClose }) => {
   const { data, addRepayment, addExpense, addCustomer } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');
@@ -261,6 +286,15 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   
+  // Repayment Form State
+  const [repayingCustomer, setRepayingCustomer] = useState<Customer | null>(null);
+  const [repayForm, setRepayForm] = useState({
+      amount: '',
+      method: PaymentMethod.WECHAT,
+      payee: data.payees[0] || '',
+      note: ''
+  });
+
   const [expenseScope, setExpenseScope] = useState<'DAILY' | 'BATCH'>('DAILY');
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
   
@@ -286,12 +320,35 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       .sort((a, b) => b.totalDebt - a.totalDebt);
   }, [data.customers, data.orders, customerSearch]);
 
-  const handleWipeDebt = (customer: any) => {
-    if (customer.totalDebt <= 0) return alert('该客户当前无欠款');
-    if (confirm(`确认要将客户 [${customer.name}] 的欠款“一笔勾销”吗？\n本次全额核销：¥${customer.totalDebt.toLocaleString()}`)) {
-      addRepayment({ id: Date.now().toString(), customerId: customer.id, customerName: customer.name, amount: customer.totalDebt, date: new Date().toISOString(), payee: data.payees[0], note: '快速一笔勾销' });
-      alert('✅ 核销成功！');
-    }
+  const handleOpenRepay = (customer: Customer) => {
+      setRepayingCustomer(customer);
+      setRepayForm({
+          amount: customer.totalDebt.toString(),
+          method: PaymentMethod.WECHAT,
+          payee: data.payees[0] || '',
+          note: ''
+      });
+  };
+
+  const handleSubmitRepayment = () => {
+      if (!repayingCustomer) return;
+      const amount = parseFloat(repayForm.amount);
+      if (isNaN(amount) || amount <= 0) return alert('请输入有效还款金额');
+      if (!repayForm.payee) return alert('请选择收款人');
+
+      addRepayment({ 
+          id: Date.now().toString(), 
+          customerId: repayingCustomer.id, 
+          customerName: repayingCustomer.name, 
+          amount: amount, 
+          date: new Date().toISOString(), 
+          payee: repayForm.payee,
+          paymentMethod: repayForm.method,
+          note: repayForm.note 
+      });
+      
+      alert('✅ 收款成功！');
+      setRepayingCustomer(null);
   };
 
   const handleAddNewCustomer = () => {
@@ -324,6 +381,79 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
     onClose();
   };
 
+  // 渲染：详细还款录入弹窗
+  if (repayingCustomer) {
+      return (
+        <div className="fixed inset-0 z-[250] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 space-y-6 shadow-2xl">
+                 <div className="flex justify-between items-center border-b border-gray-50 pb-4">
+                    <div>
+                        <h3 className="text-xl font-black text-gray-800">{repayingCustomer.name}</h3>
+                        <p className="text-xs text-gray-400 font-bold">当前欠款: <span className="text-red-500">¥{repayingCustomer.totalDebt.toLocaleString()}</span></p>
+                    </div>
+                    <button onClick={() => setRepayingCustomer(null)} className="p-2 bg-gray-100 rounded-full"><X size={20} /></button>
+                 </div>
+
+                 <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">本次收款金额</label>
+                        <input 
+                            type="number"
+                            autoFocus
+                            value={repayForm.amount}
+                            onChange={e => setRepayForm({...repayForm, amount: e.target.value})}
+                            className="w-full bg-emerald-50 p-5 rounded-2xl text-3xl font-black text-emerald-600 outline-none border-2 border-transparent focus:border-emerald-500 transition-all text-center"
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">收款方式</label>
+                        <div className="grid grid-cols-3 gap-2">
+                             {[
+                                { id: PaymentMethod.WECHAT, label: '微信', icon: '💬', color: 'bg-green-100 text-green-600 border-green-200' },
+                                { id: PaymentMethod.ALIPAY, label: '支付宝', icon: '💳', color: 'bg-blue-100 text-blue-600 border-blue-200' },
+                                { id: PaymentMethod.CASH, label: '现金', icon: '💰', color: 'bg-orange-100 text-orange-600 border-orange-200' },
+                             ].map(m => (
+                                 <button
+                                    key={m.id}
+                                    onClick={() => setRepayForm({...repayForm, method: m.id})}
+                                    className={`py-3 rounded-xl text-xs font-black border-2 transition-all flex flex-col items-center gap-1 ${repayForm.method === m.id ? m.color : 'bg-gray-50 text-gray-400 border-transparent'}`}
+                                 >
+                                    <span className="text-lg">{m.icon}</span>
+                                    {m.label}
+                                 </button>
+                             ))}
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">收款人 (经手人)</label>
+                        <div className="flex flex-wrap gap-2">
+                            {data.payees.map(p => (
+                                <button
+                                    key={p}
+                                    onClick={() => setRepayForm({...repayForm, payee: p})}
+                                    className={`px-4 py-2 rounded-lg text-xs font-black transition-all ${repayForm.payee === p ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500'}`}
+                                >
+                                    {p}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                 </div>
+
+                 <button 
+                    onClick={handleSubmitRepayment}
+                    className="w-full bg-gray-900 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-gray-200 active:scale-95 transition-all"
+                 >
+                    确认收款
+                 </button>
+             </div>
+        </div>
+      );
+  }
+
+  // 渲染：客户列表
   if (type === 'repayment') {
     return (
       <div className="fixed inset-0 z-[200] bg-[#F1F3F6] flex flex-col animate-in slide-in-from-right">
@@ -362,7 +492,7 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                         <p className={`text-2xl font-black ${c.totalDebt > 0 ? 'text-[#ef4444]' : 'text-[#d1d5db]'}`}>¥{c.totalDebt.toLocaleString()}</p>
                    </div>
                    <button 
-                        onClick={() => handleWipeDebt(c)}
+                        onClick={() => handleOpenRepay(c)}
                         className={`w-11 h-11 rounded-xl flex items-center justify-center border-2 transition-all active:scale-90 ${c.totalDebt > 0 ? 'bg-[#ebf5ff] border-[#bfdbfe] text-[#3b82f6] shadow-sm' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
                    >
                         <Wallet size={20} strokeWidth={2.5} />
