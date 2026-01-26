@@ -6,9 +6,9 @@ import {
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
-  Plus, PlusCircle, CheckCircle2, UserCog
+  Plus, PlusCircle, CheckCircle2, UserCog, FileText
 } from 'lucide-react';
-import { PricingMode, OrderStatus, Order, Product, Batch, Repayment } from '../types';
+import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -126,8 +126,17 @@ const BatchFormFields: React.FC<{
 const ProductFormFields: React.FC<{
   productForm: { name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string };
   setProductForm: React.Dispatch<React.SetStateAction<{ name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string }>>;
-}> = ({ productForm, setProductForm }) => (
+  onOpenTemplates?: () => void;
+}> = ({ productForm, setProductForm, onOpenTemplates }) => (
   <div className="space-y-5"> 
+    {onOpenTemplates && (
+        <button 
+            onClick={onOpenTemplates}
+            className="w-full py-3 bg-emerald-50 text-emerald-600 rounded-2xl font-black text-sm border-2 border-dashed border-emerald-200 flex items-center justify-center gap-2 active:bg-emerald-100 mb-2"
+        >
+            <FileText size={18} /> 📜 从模板库导入... (快速填充)
+        </button>
+    )}
     <div>
       <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">品名</label>
       <input 
@@ -206,7 +215,7 @@ const ProductFormFields: React.FC<{
 );
 
 const ManageView: React.FC = () => {
-  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees';
+  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees' | 'template_list';
   const [subView, setSubView] = useState<ViewState>('main');
   
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
@@ -224,9 +233,14 @@ const ManageView: React.FC = () => {
   const [feeForm, setFeeForm] = useState({ name: '运费', amount: '' });
   const [newPayeeName, setNewPayeeName] = useState('');
 
+  // Forms
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
   const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' });
   
+  // Template Form (Reusable)
+  const [isAddingTemplate, setIsAddingTemplate] = useState(false);
+  const [templateForm, setTemplateForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', tare: '0', threshold: '' });
+
   // Reconcile States
   const [reconcileDate, setReconcileDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [reconcileBatchId, setReconcileBatchId] = useState('ALL');
@@ -246,7 +260,7 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, deletePayee } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, deletePayee, addTemplate, deleteTemplate } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -337,6 +351,33 @@ const ManageView: React.FC = () => {
     if (!newPayeeName.trim()) return alert('请输入名字');
     addPayee(newPayeeName.trim());
     setNewPayeeName('');
+  };
+
+  const handleSaveTemplate = () => {
+    if (!templateForm.name) return alert('请输入模板名称');
+    addTemplate({
+        id: Date.now().toString(),
+        name: templateForm.name,
+        category: templateForm.category,
+        pricingMode: templateForm.mode,
+        defaultPrice: parseFloat(templateForm.sell) || 0,
+        defaultTare: parseFloat(templateForm.tare) || 0,
+        lowStockThreshold: parseFloat(templateForm.threshold) || 20
+    });
+    setIsAddingTemplate(false);
+  };
+
+  const handleSelectTemplate = (t: ProductTemplate) => {
+      setProductForm({
+          name: t.name,
+          category: t.category,
+          mode: t.pricingMode,
+          sell: t.defaultPrice.toString(),
+          tare: t.defaultTare.toString(),
+          threshold: t.lowStockThreshold.toString(),
+          stock: '' // Keep stock empty for user to fill
+      });
+      setSubView('add_product');
   };
 
   // --- MERGED HISTORY LIST (Orders + Repayments) ---
@@ -487,6 +528,59 @@ const ManageView: React.FC = () => {
       );
   }
 
+  // Template List View
+  if (subView === 'template_list') {
+      const templates = data.templates || [];
+      return (
+          <SubViewShell title="选择商品模板" onBack={() => setSubView('add_product')}>
+              <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 mb-4">
+                 <div className="flex justify-between items-center mb-4">
+                     <h3 className="font-black text-gray-800">常用商品模板</h3>
+                     <button onClick={() => setIsAddingTemplate(true)} className="flex items-center gap-1 text-emerald-600 text-xs font-black bg-emerald-50 px-3 py-1.5 rounded-full"><Plus size={14}/> 新建模板</button>
+                 </div>
+                 
+                 {isAddingTemplate && (
+                     <div className="bg-gray-50 p-4 rounded-xl space-y-3 animate-in fade-in mb-4">
+                         <input value={templateForm.name} onChange={e => setTemplateForm({...templateForm, name: e.target.value})} placeholder="模板名称 (如: 砂糖橘-大框)" className="w-full bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                         <div className="grid grid-cols-2 gap-2">
+                             <input type="number" value={templateForm.sell} onChange={e => setTemplateForm({...templateForm, sell: e.target.value})} placeholder="默认售价" className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                             <input type="number" value={templateForm.tare} onChange={e => setTemplateForm({...templateForm, tare: e.target.value})} placeholder="默认皮重" className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                         </div>
+                         <div className="flex gap-2">
+                             <button onClick={() => setTemplateForm({...templateForm, mode: PricingMode.WEIGHT})} className={`flex-1 py-2 rounded-lg text-xs font-black ${templateForm.mode === PricingMode.WEIGHT ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>按斤</button>
+                             <button onClick={() => setTemplateForm({...templateForm, mode: PricingMode.PIECE})} className={`flex-1 py-2 rounded-lg text-xs font-black ${templateForm.mode === PricingMode.PIECE ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>按件</button>
+                         </div>
+                         <div className="flex gap-2 pt-2">
+                             <button onClick={handleSaveTemplate} className="flex-1 bg-emerald-500 text-white py-2 rounded-lg text-xs font-black">保存</button>
+                             <button onClick={() => setIsAddingTemplate(false)} className="flex-1 bg-gray-200 text-gray-500 py-2 rounded-lg text-xs font-black">取消</button>
+                         </div>
+                     </div>
+                 )}
+
+                 <div className="space-y-2">
+                     {templates.map(t => (
+                         <div key={t.id} onClick={() => handleSelectTemplate(t)} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl active:bg-emerald-50 active:border-emerald-200 border border-transparent transition-all">
+                             <div>
+                                 <p className="font-black text-gray-800">{t.name}</p>
+                                 <p className="text-[10px] text-gray-400 font-bold">默认: ¥{t.defaultPrice} | 皮: {t.defaultTare}</p>
+                             </div>
+                             <button 
+                                onClick={(e) => { e.stopPropagation(); if(confirm('确认删除此模板？')) deleteTemplate(t.id); }}
+                                className="p-2 text-gray-300 hover:text-red-400"
+                             >
+                                 <Trash2 size={16} />
+                             </button>
+                         </div>
+                     ))}
+                     {templates.length === 0 && !isAddingTemplate && (
+                         <div className="text-center py-8 text-gray-400 font-bold text-xs">暂无模板，请先新建</div>
+                     )}
+                 </div>
+              </div>
+          </SubViewShell>
+      );
+  }
+
   // 2. Add/Edit Batch Modal
   if (subView === 'add_batch' || subView === 'edit_batch') {
     return (
@@ -568,7 +662,11 @@ const ManageView: React.FC = () => {
   if (subView === 'add_product' || subView === 'edit_product') {
      return (
         <FormModal title={subView === 'add_product' ? '添加商品' : '编辑商品'} onBack={() => setSubView('batch_detail')} onSave={handleSaveProduct}>
-           <ProductFormFields productForm={productForm} setProductForm={setProductForm} />
+           <ProductFormFields 
+                productForm={productForm} 
+                setProductForm={setProductForm} 
+                onOpenTemplates={subView === 'add_product' ? () => setSubView('template_list') : undefined} 
+           />
            {subView === 'edit_product' && (
               <button onClick={() => { if(confirm('确认删除该商品吗？')) { deleteProduct(selectedProductId!); setSubView('batch_detail'); }}} className="w-full mt-8 py-4 text-red-500 bg-red-50 rounded-2xl font-black flex items-center justify-center gap-2"><Trash2 size={18}/> 删除此商品</button>
            )}
@@ -664,10 +762,12 @@ const ManageView: React.FC = () => {
     );
   }
 
-  // 6. Order Detail View
+  // ... (Rest of view logic remains same) ...
+  // 6. Order Detail View (Abbreviated, use previous content for full)
   if (subView === 'order_detail' && selectedOrder) {
-    const isCancelled = selectedOrder.status === OrderStatus.CANCELLED;
-    return (
+      const isCancelled = selectedOrder.status === OrderStatus.CANCELLED;
+      // ... (Same order detail code as before)
+       return (
       <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
          <header className="bg-[#2D3142] text-white p-6 pb-8 shrink-0 relative z-20">
             <div className="flex justify-between items-center mb-6">
@@ -726,7 +826,7 @@ const ManageView: React.FC = () => {
     );
   }
 
-  // 7. Inventory List View (Standard List)
+  // 7. Inventory List View (Standard List) - Same as before
   if (subView === 'inventory') {
      return (
         <SubViewShell 
@@ -790,7 +890,7 @@ const ManageView: React.FC = () => {
      );
   }
 
-  // 8. Adjust Stock View
+  // 8. Adjust Stock View - Same as before
   if (subView === 'adjust_stock') {
     const qtyDiff = (parseFloat(adjustForm.actualQty) || 0) - adjustForm.currentQty;
     const isLoss = qtyDiff < 0;
@@ -896,7 +996,6 @@ const ManageView: React.FC = () => {
   }
 
   // 9. Reconcile View (Code kept same, skipped for brevity as no changes)
-  // ... (Reconcile View & Customers View remain unchanged)
   // ...
   if (subView === 'reconcile') {
       const filteredReconcileOrders = data.orders.filter(o => {
@@ -979,7 +1078,7 @@ const ManageView: React.FC = () => {
       );
   }
 
-  // 10. Customers View
+  // 10. Customers View (Same as before)
   if (subView === 'customers') {
       const debtCustomers = data.customers.filter(c => c && c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
       const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);

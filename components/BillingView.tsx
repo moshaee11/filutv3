@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
 import { Product, PricingMode, OrderItem, PaymentMethod, Order, Customer, OrderStatus } from '../types';
-import { Search, ShoppingBag, X, ArrowLeft, Check, Delete, PlusCircle, UserPlus, Scissors, FileText, Calendar, Clock, Layers, Truck, AlertTriangle, ChevronDown, StickyNote } from 'lucide-react';
+import { Search, ShoppingBag, X, ArrowLeft, Check, Delete, PlusCircle, UserPlus, Scissors, FileText, Calendar, Clock, Layers, Truck, AlertTriangle, ChevronDown, StickyNote, Phone } from 'lucide-react';
 import Keypad from './Keypad';
 import { preciseCalc, generateOrderNo } from '../utils';
 
@@ -360,12 +360,23 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
           >
              <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-500"></div>
              <div className="flex items-center gap-4 pl-2">
-                <div className="w-12 h-12 bg-emerald-500 text-white rounded-full flex items-center justify-center font-black text-xl shadow-lg shadow-emerald-200">
+                <div className="w-12 h-12 bg-emerald-500 text-white rounded-full flex items-center justify-center font-black text-xl shadow-lg shadow-emerald-200 shrink-0">
                   {activeCustomer?.name[0]}
                 </div>
                 <div>
                   <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest mb-0.5">当前购货客户</p>
-                  <p className="text-lg font-black text-gray-800">{activeCustomer?.name}</p>
+                  <div className="flex items-center gap-2">
+                      <p className="text-lg font-black text-gray-800">{activeCustomer?.name}</p>
+                      {activeCustomer?.phone && (
+                          <a 
+                            href={`tel:${activeCustomer.phone}`} 
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-green-100 text-green-600 p-1.5 rounded-full active:bg-green-200 transition-colors"
+                          >
+                             <Phone size={14} fill="currentColor" />
+                          </a>
+                      )}
+                  </div>
                 </div>
              </div>
              <div className="bg-gray-50 p-2.5 rounded-xl text-emerald-500 group-active:bg-emerald-50 transition-colors">
@@ -374,13 +385,20 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
           </div>
 
           <div className="bg-white p-4 rounded-[1.5rem] space-y-3 shadow-sm border border-gray-100">
-            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest px-1">收款人</p>
+            <div className="flex items-center justify-between px-1">
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">选择收款人 (经手人)</p>
+                <div className="flex items-center gap-1.5 bg-gray-900 text-white px-3 py-1 rounded-full text-[10px] font-black shadow-md">
+                   <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
+                   当前: {paymentInfo.payee}
+                </div>
+            </div>
+            
             <div className="flex flex-wrap gap-2">
               {data.payees.map(p => (
                 <button 
                   key={p} 
                   onClick={() => setPaymentInfo({...paymentInfo, payee: p})}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all ${paymentInfo.payee === p ? 'bg-gray-800 text-white shadow-md' : 'bg-gray-100 text-gray-500'}`}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all border-2 ${paymentInfo.payee === p ? 'bg-gray-800 border-gray-800 text-white shadow-md scale-105' : 'bg-gray-50 border-transparent text-gray-500 hover:bg-gray-100'}`}
                 >
                   {p}
                 </button>

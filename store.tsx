@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus } from './types';
+import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate } from './types';
 import { preciseCalc } from './utils';
 
 interface AppContextType {
@@ -30,6 +30,9 @@ interface AppContextType {
   addCustomer: (c: Customer) => void;
   importData: (jsonStr: string) => void;
   exportData: () => string;
+  // Template Methods
+  addTemplate: (t: ProductTemplate) => void;
+  deleteTemplate: (id: string) => void;
 }
 
 const STORAGE_KEY = 'FRUIT_PRO_DATA_V3';
@@ -45,7 +48,11 @@ const initialData: AppData = {
     { id: 'guest', name: '散客', phone: '', totalDebt: 0, isGuest: true }
   ],
   payees: ['豆建国', '王妮', '关灵恩', '楠楠嫂'],
-  expenses: []
+  expenses: [],
+  templates: [ // 默认提供几个模板
+    { id: 't1', name: '砂糖橘-大框', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 2.5, defaultPrice: 3.5, lowStockThreshold: 20 },
+    { id: 't2', name: '砂糖橘-精品', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 1.5, defaultPrice: 4.2, lowStockThreshold: 10 },
+  ]
 };
 
 // --- 辅助函数：全量重算客户欠款 ---
@@ -136,6 +143,7 @@ const sanitizeData = (incoming: any): AppData => {
     customers: cleanCustomers,
     payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
     expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
+    templates: safeArray<ProductTemplate>(incoming.templates, (t) => !!t.id && !!t.name),
   };
 };
 
@@ -251,6 +259,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deletePayee = (name: string) => setData(prev => ({ ...prev, payees: prev.payees.filter(p => p !== name) }));
 
   const addCustomer = (c: Customer) => setData(prev => ({ ...prev, customers: [...prev.customers, c] }));
+  
+  // Template CRUD
+  const addTemplate = (t: ProductTemplate) => setData(prev => ({ ...prev, templates: [...(prev.templates || []), t] }));
+  const deleteTemplate = (id: string) => setData(prev => ({ ...prev, templates: (prev.templates || []).filter(t => t.id !== id) }));
 
   // --- 订单管理 ---
   const addOrder = (o: Order) => {
@@ -444,7 +456,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addRepayment, addExpense,
       addPayee, updatePayee, deletePayee,
       addCustomer, 
-      importData, exportData
+      importData, exportData,
+      addTemplate, deleteTemplate
     }}>
       {children}
     </AppContext.Provider>

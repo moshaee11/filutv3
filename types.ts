@@ -22,6 +22,17 @@ export interface ExtraFeeItem {
   amount: number;
 }
 
+// 新增：商品模板接口
+export interface ProductTemplate {
+  id: string;
+  name: string;
+  category: string;
+  pricingMode: PricingMode;
+  defaultTare: number;
+  defaultPrice: number;
+  lowStockThreshold: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -113,4 +124,5 @@ export interface AppData {
   customers: Customer[];
   payees: string[];
   expenses: Expense[];
+  templates: ProductTemplate[]; // 新增：模板列表
 }

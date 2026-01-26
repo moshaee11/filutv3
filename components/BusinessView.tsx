@@ -9,7 +9,7 @@ import { PaymentMethod, OrderStatus, Order, Expense } from '../types';
 import { 
   Download, CreditCard, DollarSign, Wallet, 
   TrendingDown, TrendingUp, PieChart, BarChart3, Calendar, Layers, Truck, X, ArrowRight, ArrowLeft,
-  Table2, ChevronRight, ChevronDown, Filter, ChevronUp
+  Table2, ChevronRight, ChevronDown, Filter, ChevronUp, User, Tag, Clock
 } from 'lucide-react';
 
 // --- Pivot Table Types & Components ---
@@ -24,54 +24,146 @@ type PivotRow = {
 };
 
 type FlatItem = {
-  date: string;
+  date: string; // Formatted date string based on grain
+  rawDate: Date; // For sorting
   productName: string;
   category: string; 
   paymentMethod: string;
+  payee: string;
   customerName: string;
   qty: number;
-  amount: number;
+  amount: number; // Can be negative for expenses/costs
+  type: 'INCOME' | 'EXPENSE' | 'COST'; // For styling
 };
 
 const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { data } = useApp();
-  const [groupBy, setGroupBy] = useState<('date' | 'productName' | 'paymentMethod' | 'customerName')[]>(['date', 'productName']);
+  
+  // 1. New: Time Granularity State
+  const [timeGrain, setTimeGrain] = useState<'day' | 'week' | 'month'>('day');
+
+  const [groupBy, setGroupBy] = useState<('date' | 'productName' | 'category' | 'paymentMethod' | 'customerName' | 'payee')[]>(['date', 'category']);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   
-  // Batch Filter State inside Pivot Table
+  // Filters inside Pivot Table
   const [selectedBatchId, setSelectedBatchId] = useState('ALL');
-  const activeBatches = useMemo(() => data.batches.filter(b => !b.isClosed), [data.batches]);
+  const [filterPayee, setFilterPayee] = useState('ALL');
+  const [filterMethod, setFilterMethod] = useState('ALL');
 
-  // 1. Flatten Data with Batch Filtering
+  const activeBatches = useMemo(() => data.batches, [data.batches]); // Show all batches for history analysis
+  
+  const paymentMethodOptions = [
+      { id: 'ALL', label: '全部渠道', icon: Wallet },
+      { id: PaymentMethod.WECHAT, label: '微信', icon: null },
+      { id: PaymentMethod.ALIPAY, label: '支付宝', icon: null },
+      { id: PaymentMethod.CASH, label: '现金', icon: null },
+      { id: PaymentMethod.OTHER, label: '欠款', icon: null },
+  ];
+
+  // Helper: Date Formatter based on Grain
+  const formatDate = (dateStr: string | Date): string => {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '未知日期';
+
+      if (timeGrain === 'month') {
+          return `${d.getFullYear()}年${d.getMonth() + 1}月`;
+      }
+      if (timeGrain === 'week') {
+          // Simple week number
+          const firstDayOfYear = new Date(d.getFullYear(), 0, 1);
+          const pastDays = (d.getTime() - firstDayOfYear.getTime()) / 86400000;
+          const weekNum = Math.ceil((pastDays + firstDayOfYear.getDay() + 1) / 7);
+          return `${d.getFullYear()}年第${weekNum}周`;
+      }
+      // Day
+      return `${d.getMonth() + 1}月${d.getDate()}日`;
+  };
+
+  // 1. Flatten Data with ALL Filters AND Expenses/Costs
   const flatData = useMemo(() => {
     const rows: FlatItem[] = [];
+
+    // --- A. INCOME (Orders) ---
     data.orders.filter(o => o.status === OrderStatus.ACTIVE).forEach(order => {
-      const dateObj = new Date(order.createdAt);
-      const dateStr = `${dateObj.getMonth() + 1}月${dateObj.getDate()}日`; // MM月DD日 format
+      if (filterPayee !== 'ALL' && order.payee !== filterPayee) return;
+      if (filterMethod !== 'ALL' && order.paymentMethod !== filterMethod) return;
+
+      const dateStr = formatDate(order.createdAt);
       
       const payMap: Record<string, string> = { 'WECHAT': '微信', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '挂账' };
       const payLabel = payMap[order.paymentMethod] || '其他';
 
       order.items.forEach(item => {
-        // Filter Logic: Check if product belongs to selected batch
         const product = data.products.find(p => p.id === item.productId);
         if (selectedBatchId !== 'ALL') {
-            if (product?.batchId !== selectedBatchId) return; // Skip this item
+            if (product?.batchId !== selectedBatchId) return;
         }
 
         rows.push({
           date: dateStr,
+          rawDate: new Date(order.createdAt),
           productName: item.productName,
-          category: item.productName.includes('果') ? '大果' : '其他', 
+          category: product?.category || '其他销售', 
           paymentMethod: payLabel,
+          payee: order.payee || '未记录',
           customerName: order.customerName,
           qty: item.qty,
-          amount: item.subtotal 
+          amount: item.subtotal,
+          type: 'INCOME'
         });
       });
     });
+
+    // --- B. EXPENSES (Operational) ---
+    // Only include if we are NOT filtering by specific Payment Method/Payee (Expenses don't strictly have these)
+    // Or if we want to include them, we treat them as 'General'. 
+    // For profit analysis, we usually want to subtract them regardless of payee filter unless strict.
+    // Let's hide expenses if specific Payee/Method is selected to avoid confusion, OR keep them separately.
+    // Decision: Only show Expenses if filters are 'ALL' to ensure "Profit" makes sense for the whole shop/batch.
+    if (filterPayee === 'ALL' && filterMethod === 'ALL') {
+        data.expenses.forEach(exp => {
+            if (selectedBatchId !== 'ALL' && exp.batchId && exp.batchId !== selectedBatchId) return;
+            // If expense has no batchId but we selected a batch, usually we hide it or show as overhead.
+            // Let's strictly follow: if expense.batchId exists, it must match.
+            if (selectedBatchId !== 'ALL' && !exp.batchId) return; // Hide general expenses when filtering specific batch? Or show? Let's hide to be precise.
+
+            rows.push({
+                date: formatDate(exp.date),
+                rawDate: new Date(exp.date),
+                productName: exp.type, // e.g. "Lunch"
+                category: '❌ 运营支出',
+                paymentMethod: '现金支出',
+                payee: '公共',
+                customerName: '无',
+                qty: 0,
+                amount: -exp.amount, // Negative!
+                type: 'EXPENSE'
+            });
+        });
+
+        // --- C. COST (Batch Purchase Cost) ---
+        // Only show if we are looking at ALL batches or a specific batch
+        data.batches.forEach(batch => {
+            if (selectedBatchId !== 'ALL' && batch.id !== selectedBatchId) return;
+            if (batch.cost <= 0) return;
+
+            rows.push({
+                date: formatDate(batch.inboundDate),
+                rawDate: new Date(batch.inboundDate),
+                productName: '货品采购',
+                category: '📉 采购成本',
+                paymentMethod: '本金支出',
+                payee: '老板',
+                customerName: '供应商',
+                qty: 0,
+                amount: -batch.cost, // Negative!
+                type: 'COST'
+            });
+        });
+    }
+
     return rows;
-  }, [data.orders, data.products, selectedBatchId]);
+  }, [data.orders, data.products, data.expenses, data.batches, selectedBatchId, filterPayee, filterMethod, timeGrain]);
 
   // 2. Recursive Grouping Logic
   const groupData = (items: FlatItem[], keys: string[], parentKey: string = '', level: number = 0): PivotRow[] => {
@@ -91,20 +183,28 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       const totalQty = groupItems.reduce((sum, i) => sum + i.qty, 0);
       const totalAmount = groupItems.reduce((sum, i) => sum + i.amount, 0);
       
+      // Sort children
+      let children = groupData(groupItems, keys.slice(1), uniqueKey, level + 1);
+
       return {
         key: uniqueKey,
         label: keyVal,
         qty: totalQty,
         amount: totalAmount,
         level: level,
-        children: groupData(groupItems, keys.slice(1), uniqueKey, level + 1)
+        children: children
       };
     });
 
+    // Sorting logic
     if (currentKeyField === 'date') {
-       rows.sort((a,b) => a.label.localeCompare(b.label)); 
+        // Sort dates chronologically if possible, otherwise string sort
+        // Since we grouped by formatted string, string compare works for YYYY-MM, but maybe not MM-DD.
+        // Simple string sort for now (or improve with rawDate map)
+        rows.sort((a,b) => b.label.localeCompare(a.label)); // Newest first
     } else {
-       rows.sort((a, b) => b.amount - a.amount);
+        // Sort by Amount (Profit/Rev) Descending
+        rows.sort((a, b) => b.amount - a.amount);
     }
 
     return rows;
@@ -115,15 +215,9 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const grandQty = rootChildren.reduce((s, c) => s + c.qty, 0);
     const grandAmount = rootChildren.reduce((s, c) => s + c.amount, 0);
     
-    // Auto expand top level if there are few items
-    if (rootChildren.length < 5 && expandedKeys.size === 0) {
-        // Effect handled outside render ideally, but acceptable here for init
-        // setExpandedKeys(new Set(rootChildren.map(r => r.key)));
-    }
-
     return [
         ...rootChildren,
-        { key: 'grand_total', label: '总计', qty: grandQty, amount: grandAmount, level: 0, isTotal: true }
+        { key: 'grand_total', label: '预估毛利 (收入-成本-支出)', qty: grandQty, amount: grandAmount, level: 0, isTotal: true }
     ];
   }, [flatData, groupBy]);
 
@@ -139,7 +233,7 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const DimensionButton: React.FC<{ label: string; active: boolean; onClick: () => void }> = ({ label, active, onClick }) => (
     <button 
         onClick={onClick}
-        className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${active ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-gray-100 text-gray-500'}`}
+        className={`px-3 py-2 rounded-lg text-[10px] font-black transition-all whitespace-nowrap ${active ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}
     >
         {label}
     </button>
@@ -154,6 +248,12 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const bgColor = row.isTotal ? 'bg-emerald-50' : (row.level === 0 ? 'bg-white' : 'bg-gray-50/50');
     const labelStyle = row.level === 0 ? 'font-black text-gray-800 text-sm' : 'font-bold text-gray-500 text-xs';
     const borderStyle = row.level === 0 ? 'border-b border-gray-100' : 'border-b border-gray-100 border-dashed';
+
+    // Amount Color: Red for negative (Loss/Expense), Green/Black for positive
+    let amountColor = 'text-gray-900';
+    if (row.isTotal) amountColor = row.amount >= 0 ? 'text-emerald-600' : 'text-red-500';
+    else if (row.amount < 0) amountColor = 'text-red-500';
+    else if (row.level === 0) amountColor = 'text-gray-800';
 
     return (
       <React.Fragment key={row.key}>
@@ -174,12 +274,14 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
           {/* Qty Column */}
           <div className="w-20 text-right">
-             <span className={`font-mono font-bold ${row.isTotal ? 'text-emerald-600' : 'text-gray-500'} text-xs`}>{row.qty}</span>
+             <span className={`font-mono font-bold ${row.isTotal ? 'text-emerald-600' : 'text-gray-400'} text-xs`}>{row.qty > 0 ? row.qty : '-'}</span>
           </div>
 
           {/* Amount Column */}
           <div className="w-24 text-right">
-             <span className={`font-mono font-black ${row.isTotal ? 'text-emerald-600 text-sm' : 'text-gray-900 text-xs'}`}>¥{Math.round(row.amount).toLocaleString()}</span>
+             <span className={`font-mono font-black ${amountColor} ${row.isTotal ? 'text-sm' : 'text-xs'}`}>
+                {row.amount < 0 ? '-' : ''}¥{Math.abs(Math.round(row.amount)).toLocaleString()}
+             </span>
           </div>
         </div>
         {hasChildren && isExpanded && row.children!.map(child => renderRow(child as any))}
@@ -195,9 +297,9 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
        </header>
 
        {/* Controls */}
-       <div className="bg-white px-4 py-4 border-b border-gray-100 space-y-3 z-10">
+       <div className="bg-white px-4 py-4 border-b border-gray-100 space-y-3 z-10 shadow-sm">
           
-          {/* Batch Filter */}
+          {/* Filter Row 1: Batch */}
           <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
              <button 
                 onClick={() => setSelectedBatchId('ALL')}
@@ -216,15 +318,79 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
              ))}
           </div>
 
+          {/* Filter Row 2: Payee & Method Combined Row */}
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 border-t border-gray-50 pt-2">
+             {/* Payee Section */}
+             <div className="flex items-center gap-1 pr-2 border-r border-gray-100">
+                <User size={12} className="text-gray-400" />
+                <button 
+                    onClick={() => setFilterPayee('ALL')}
+                    className={`px-2 py-1 rounded text-[10px] font-bold ${filterPayee === 'ALL' ? 'bg-blue-100 text-blue-600' : 'text-gray-400'}`}
+                >
+                    所有人
+                </button>
+                {data.payees.map(p => (
+                    <button
+                        key={p}
+                        onClick={() => setFilterPayee(p)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ${filterPayee === p ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-400 bg-gray-50'}`}
+                    >
+                        {p}
+                    </button>
+                ))}
+             </div>
+
+             {/* Method Section */}
+             <div className="flex items-center gap-1 pl-1">
+                <Wallet size={12} className="text-gray-400" />
+                <button 
+                    onClick={() => setFilterMethod('ALL')}
+                    className={`px-2 py-1 rounded text-[10px] font-bold ${filterMethod === 'ALL' ? 'bg-orange-100 text-orange-600' : 'text-gray-400'}`}
+                >
+                    所有渠道
+                </button>
+                {paymentMethodOptions.filter(m => m.id !== 'ALL').map(m => (
+                    <button
+                        key={m.id}
+                        onClick={() => setFilterMethod(m.id)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ${filterMethod === m.id ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-400 bg-gray-50'}`}
+                    >
+                        {m.label}
+                    </button>
+                ))}
+             </div>
+          </div>
+          
+          {/* Time Granularity Control */}
+          <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest pt-2 border-t border-gray-50">
+              <Clock size={12} />
+              <span>时间粒度 (合并统计)</span>
+          </div>
+          <div className="flex gap-2">
+              {[
+                  { id: 'day', label: '按日' },
+                  { id: 'week', label: '按周' },
+                  { id: 'month', label: '按月' }
+              ].map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTimeGrain(t.id as any)}
+                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-black border transition-all ${timeGrain === t.id ? 'bg-purple-500 border-purple-500 text-white shadow-md' : 'bg-white border-gray-200 text-gray-500'}`}
+                  >
+                      {t.label}
+                  </button>
+              ))}
+          </div>
+
           <div className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest pt-2 border-t border-gray-50">
               <Filter size={12} />
-              <span>分析维度 (点击切换)</span>
+              <span>透视维度 (点击重组报表)</span>
           </div>
           <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+             <DimensionButton label="日期 ➔ 分类 (看盈亏)" active={groupBy[0] === 'date' && groupBy[1] === 'category'} onClick={() => setGroupBy(['date', 'category'])} />
              <DimensionButton label="日期 ➔ 商品" active={groupBy[0] === 'date' && groupBy[1] === 'productName'} onClick={() => setGroupBy(['date', 'productName'])} />
-             <DimensionButton label="商品 ➔ 日期" active={groupBy[0] === 'productName' && groupBy[1] === 'date'} onClick={() => setGroupBy(['productName', 'date'])} />
-             <DimensionButton label="日期 ➔ 支付" active={groupBy[0] === 'date' && groupBy[1] === 'paymentMethod'} onClick={() => setGroupBy(['date', 'paymentMethod'])} />
-             <DimensionButton label="客户 ➔ 商品" active={groupBy[0] === 'customerName' && groupBy[1] === 'productName'} onClick={() => setGroupBy(['customerName', 'productName'])} />
+             <DimensionButton label="分类 ➔ 商品" active={groupBy[0] === 'category' && groupBy[1] === 'productName'} onClick={() => setGroupBy(['category', 'productName'])} />
+             <DimensionButton label="收款人 ➔ 渠道" active={groupBy[0] === 'payee' && groupBy[1] === 'paymentMethod'} onClick={() => setGroupBy(['payee', 'paymentMethod'])} />
           </div>
        </div>
 
@@ -251,7 +417,12 @@ const BusinessView: React.FC = () => {
   
   // Initialize with today's date
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  
+  // Filters
   const [filterBatchId, setFilterBatchId] = useState<string>('ALL');
+  const [filterPayee, setFilterPayee] = useState<string>('ALL');
+  const [filterMethod, setFilterMethod] = useState<string>('ALL');
+
   const [activeDetail, setActiveDetail] = useState<'revenue' | 'expense' | null>(null);
   const [showPivotTable, setShowPivotTable] = useState(false);
 
@@ -277,13 +448,16 @@ const BusinessView: React.FC = () => {
       const inTime = oTime >= startMs && oTime <= endMs;
       const isActive = o.status === OrderStatus.ACTIVE;
       
-      let inBatch = true;
+      let matchBatch = true;
       if (filterBatchId !== 'ALL') {
           const batchProductIds = data.products.filter(p => p.batchId === filterBatchId).map(p => p.id);
-          inBatch = o.items.some(i => batchProductIds.includes(i.productId));
+          matchBatch = o.items.some(i => batchProductIds.includes(i.productId));
       }
 
-      return inTime && isActive && inBatch;
+      const matchPayee = filterPayee === 'ALL' || o.payee === filterPayee;
+      const matchMethod = filterMethod === 'ALL' || o.paymentMethod === filterMethod;
+
+      return inTime && isActive && matchBatch && matchPayee && matchMethod;
     });
 
     // 2. Expenses
@@ -291,6 +465,12 @@ const BusinessView: React.FC = () => {
        const eTime = new Date(e.date).getTime();
        const inTime = eTime >= startMs && eTime <= endMs;
        const inBatch = filterBatchId === 'ALL' || e.batchId === filterBatchId;
+       
+       // Expenses usually don't have payee/method in this app structure, but if we extended it, we would filter here.
+       // For now, if user selects Payee/Method filters, we might want to hide expenses or show all. 
+       // To be strict: if PaymentMethod is OTHER (Debt) or Cash, expenses (usually Cash) might apply.
+       // Let's keep it simple: Show expenses unless filterMethod excludes CASH? 
+       // For safety and simplicity in this logic: Only filter expenses by Batch & Date.
        return inTime && inBatch;
     });
 
@@ -298,16 +478,16 @@ const BusinessView: React.FC = () => {
     const repayments = data.repayments.filter(r => {
         const rTime = new Date(r.date).getTime();
         const inTime = rTime >= startMs && rTime <= endMs;
-        // Repayments usually don't belong to a batch, so we only filter by time if batch is ALL
-        // Or if we want strict batch accounting, we ignore repayments when a batch is selected?
-        // Let's include them for now if 'ALL', but if specific batch is selected, maybe hide them or show carefully?
-        // For simplicity: Show all repayments if ALL batch, hide if specific batch (hard to link repayment to batch)
-        const inBatch = filterBatchId === 'ALL'; 
-        return inTime && inBatch;
+        const matchBatch = filterBatchId === 'ALL'; // Repayments don't link to batch well, hide if specific batch selected
+        
+        const matchPayee = filterPayee === 'ALL' || r.payee === filterPayee;
+        const matchMethod = filterMethod === 'ALL' || r.paymentMethod === filterMethod;
+
+        return inTime && matchBatch && matchPayee && matchMethod;
     });
 
     return { orders, expenses, repayments };
-  }, [data, dateRange, filterBatchId]);
+  }, [data, dateRange, filterBatchId, filterPayee, filterMethod]);
 
 
   const stats = useMemo(() => {
@@ -386,6 +566,14 @@ const BusinessView: React.FC = () => {
       return <PivotTable onClose={() => setShowPivotTable(false)} />;
   }
 
+  const paymentMethodOptions = [
+      { id: 'ALL', label: '全部渠道', icon: Wallet },
+      { id: PaymentMethod.WECHAT, label: '微信', icon: null },
+      { id: PaymentMethod.ALIPAY, label: '支付宝', icon: null },
+      { id: PaymentMethod.CASH, label: '现金', icon: null },
+      { id: PaymentMethod.OTHER, label: '欠款/挂账', icon: null },
+  ];
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col overflow-hidden">
       <header className="px-6 pt-8 pb-4 bg-white shrink-0 shadow-sm z-20 rounded-b-[2rem]">
@@ -426,12 +614,13 @@ const BusinessView: React.FC = () => {
                 />
              </div>
 
+             {/* Batch Selector */}
              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
                 <button 
                     onClick={() => setFilterBatchId('ALL')}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all shrink-0 border ${filterBatchId === 'ALL' ? 'bg-slate-800 border-slate-800 text-white shadow-md' : 'bg-white border-slate-200 text-slate-500'}`}
                 >
-                    <Layers size={12} /> 全部
+                    <Layers size={12} /> 全部车次
                 </button>
                 {data.batches.filter(b => !b.isClosed).map(batch => (
                     <button
@@ -443,6 +632,42 @@ const BusinessView: React.FC = () => {
                     </button>
                 ))}
              </div>
+
+             {/* Advanced Filters (Payee & Method) */}
+             <div className="flex flex-col gap-2 pt-2 border-t border-slate-100">
+                 {/* Payee Filter */}
+                 <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                    <button 
+                        onClick={() => setFilterPayee('ALL')}
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-black whitespace-nowrap transition-all border ${filterPayee === 'ALL' ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-100 text-slate-400'}`}
+                    >
+                        <User size={12} /> 全体人员
+                    </button>
+                    {data.payees.map(p => (
+                        <button
+                            key={p}
+                            onClick={() => setFilterPayee(p)}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black whitespace-nowrap transition-all border ${filterPayee === p ? 'bg-blue-500 border-blue-500 text-white shadow-md' : 'bg-white border-slate-100 text-slate-500'}`}
+                        >
+                            {p}
+                        </button>
+                    ))}
+                 </div>
+
+                 {/* Method Filter */}
+                 <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                    {paymentMethodOptions.map(m => (
+                        <button
+                            key={m.id}
+                            onClick={() => setFilterMethod(m.id)}
+                            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-black whitespace-nowrap transition-all border ${filterMethod === m.id ? 'bg-orange-500 border-orange-500 text-white shadow-md' : 'bg-white border-slate-100 text-slate-500'}`}
+                        >
+                            {m.icon && <m.icon size={12} />}
+                            {m.label}
+                        </button>
+                    ))}
+                 </div>
+             </div>
         </div>
       </header>
 
@@ -453,15 +678,15 @@ const BusinessView: React.FC = () => {
             <h3 className="font-black text-sm">收款账户明细 (含回款)</h3>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className="bg-[#F0FDF4] p-4 rounded-2xl text-center border border-emerald-50">
+            <div className={`bg-[#F0FDF4] p-4 rounded-2xl text-center border border-emerald-50 transition-opacity ${stats.wechat === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
               <p className="text-[10px] text-emerald-600 font-black mb-1">💬 微信</p>
               <p className="text-lg font-black text-emerald-900">¥{stats.wechat.toLocaleString()}</p>
             </div>
-            <div className="bg-[#EFF6FF] p-4 rounded-2xl text-center border border-blue-50">
+            <div className={`bg-[#EFF6FF] p-4 rounded-2xl text-center border border-blue-50 transition-opacity ${stats.alipay === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
               <p className="text-[10px] text-blue-600 font-black mb-1">💳 支付宝</p>
               <p className="text-lg font-black text-blue-900">¥{stats.alipay.toLocaleString()}</p>
             </div>
-            <div className="bg-[#FFFBEB] p-4 rounded-2xl text-center border border-amber-50">
+            <div className={`bg-[#FFFBEB] p-4 rounded-2xl text-center border border-amber-50 transition-opacity ${stats.cash === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
               <p className="text-[10px] text-amber-600 font-black mb-1">💰 现金</p>
               <p className="text-lg font-black text-amber-900">¥{stats.cash.toLocaleString()}</p>
             </div>
@@ -589,9 +814,12 @@ const BusinessView: React.FC = () => {
                              <div className="text-xs text-gray-400 mb-2">
                                 {o.items.map(i => `${i.productName}x${i.qty}`).join(', ')}
                              </div>
-                             <div className="flex justify-between text-[10px] text-gray-400 font-bold uppercase">
+                             <div className="flex justify-between text-[10px] text-gray-400 font-bold uppercase items-center">
                                 <span>{o.orderNo}</span>
-                                <span>{new Date(o.createdAt).toLocaleString()}</span>
+                                <span className="flex items-center gap-1">
+                                    <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-500">{o.payee}</span>
+                                    <span>{new Date(o.createdAt).toLocaleString()}</span>
+                                </span>
                              </div>
                              {o.discount > 0 && (
                                  <div className="mt-2 text-[10px] text-orange-400 font-bold bg-orange-50 p-1.5 rounded inline-block">
