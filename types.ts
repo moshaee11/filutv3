@@ -116,6 +116,14 @@ export interface Expense {
   batchId?: string;
 }
 
+export interface PendingOrder {
+  id: string;
+  items: OrderItem[];
+  customerId: string;
+  createdAt: string;
+  note?: string;
+}
+
 export interface AppData {
   products: Product[];
   batches: Batch[];
@@ -125,4 +133,5 @@ export interface AppData {
   payees: string[];
   expenses: Expense[];
   templates: ProductTemplate[]; // 新增：模板列表
+  pendingOrders: PendingOrder[];
 }

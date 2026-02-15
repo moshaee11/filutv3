@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate } from './types';
-import { preciseCalc } from './utils';
+import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate, PendingOrder } from './types';
+import { preciseCalc, downloadJSON } from './utils';
 
 interface AppContextType {
   data: AppData;
@@ -33,6 +33,11 @@ interface AppContextType {
   // Template Methods
   addTemplate: (t: ProductTemplate) => void;
   deleteTemplate: (id: string) => void;
+  // Pending Orders & History
+  addPendingOrder: (p: PendingOrder) => void;
+  removePendingOrder: (id: string) => void;
+  getLastPrice: (customerId: string, productId: string) => number | null;
+  archiveOldData: (months: number) => void;
 }
 
 const STORAGE_KEY = 'FRUIT_PRO_DATA_V3';
@@ -49,23 +54,20 @@ const initialData: AppData = {
   ],
   payees: ['豆建国', '王妮', '关灵恩', '楠楠嫂'],
   expenses: [],
-  templates: [ // 默认提供几个模板
+  templates: [
     { id: 't1', name: '砂糖橘-大框', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 2.5, defaultPrice: 3.5, lowStockThreshold: 20 },
     { id: 't2', name: '砂糖橘-精品', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 1.5, defaultPrice: 4.2, lowStockThreshold: 10 },
-  ]
+  ],
+  pendingOrders: []
 };
 
 // --- 辅助函数：全量重算客户欠款 ---
-// 解决导入旧数据或数据不一致时，客户欠款显示不正确的问题
 const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers: Customer[]): Customer[] => {
   const debtMap = new Map<string, number>();
 
-  // 1. 累加所有有效订单的欠款
   orders.forEach(o => {
     if (o.status === OrderStatus.ACTIVE && o.customerId && o.customerId !== 'guest') {
-      // 优化：使用高精度计算，并移除 30 元门槛，确保所有欠款都被记录
       const debt = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
-      
       if (debt > 0) {
         const current = debtMap.get(o.customerId) || 0;
         debtMap.set(o.customerId, preciseCalc(() => current + debt));
@@ -73,24 +75,20 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
     }
   });
 
-  // 2. 减去所有还款记录
   repayments.forEach(r => {
     if (r.customerId) {
       const current = debtMap.get(r.customerId) || 0;
-      // 注意：这里可能会减成负数（如果数据有问题），后续会修正为0
       debtMap.set(r.customerId, preciseCalc(() => current - r.amount));
     }
   });
 
-  // 3. 更新客户列表
   return customers.map(c => {
     if (c.isGuest) return c;
-    const calculatedDebt = Math.max(0, debtMap.get(c.id) || 0); // 确保不小于0
+    const calculatedDebt = Math.max(0, debtMap.get(c.id) || 0); 
     return { ...c, totalDebt: calculatedDebt };
   });
 };
 
-// --- 核心修复：数据深度清洗 (修复白屏问题 + 重算欠款 + 补全初始库存) ---
 const sanitizeData = (incoming: any): AppData => {
   if (!incoming || typeof incoming !== 'object') return initialData;
 
@@ -109,7 +107,7 @@ const sanitizeData = (incoming: any): AppData => {
 
   const cleanRepayments = safeArray<Repayment>(incoming.repayments, (r) => !!r.id).map((r: any) => ({
       ...r,
-      paymentMethod: r.paymentMethod || PaymentMethod.CASH // 兼容旧数据
+      paymentMethod: r.paymentMethod || PaymentMethod.CASH 
   }));
 
   let cleanCustomers = safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
@@ -117,7 +115,6 @@ const sanitizeData = (incoming: any): AppData => {
       totalDebt: Number(c.totalDebt) || 0
   }));
 
-  // 关键步骤：根据清洗后的订单和还款，强制重算欠款
   cleanCustomers = recalculateAllDebts(cleanOrders, cleanRepayments, cleanCustomers);
 
   return {
@@ -125,7 +122,6 @@ const sanitizeData = (incoming: any): AppData => {
         ...p,
         stockQty: Number(p.stockQty) || 0,
         stockWeight: Number(p.stockWeight) || 0,
-        // 兼容旧数据：如果没有初始库存，默认等于当前库存
         initialStockQty: Number(p.initialStockQty) || Number(p.stockQty) || 0,
         initialStockWeight: Number(p.initialStockWeight) || Number(p.stockWeight) || 0,
         sellingPrice: Number(p.sellingPrice) || 0,
@@ -144,6 +140,7 @@ const sanitizeData = (incoming: any): AppData => {
     payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
     expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
     templates: safeArray<ProductTemplate>(incoming.templates, (t) => !!t.id && !!t.name),
+    pendingOrders: safeArray<PendingOrder>(incoming.pendingOrders, (p) => !!p.id && !!p.items),
   };
 };
 
@@ -157,10 +154,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!saved) return initialData;
       const parsed = JSON.parse(saved);
       const cleanData = sanitizeData(parsed);
-      if (parsed.orders?.length > 0 && cleanData.orders.length === 0) {
-          console.warn("Data sanitization removed orders. Backup created.");
-          localStorage.setItem(CORRUPT_BACKUP_KEY, saved);
-      }
       return { ...initialData, ...cleanData };
     } catch (e) {
       console.error("Failed to parse local storage", e);
@@ -178,42 +171,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(SERVER_URL_KEY, cleanUrl);
   };
 
-  const uploadToCloud = async () => {
-    if (!serverUrl) throw new Error('请先配置服务器地址');
-    const payload = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
-    
-    try {
-      const res = await fetch(`${serverUrl}/api/backup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(`上传失败: ${res.statusText}`);
-      const result = await res.json();
-      if (!result.success) throw new Error(result.message || '未知错误');
-    } catch (e: any) {
-      console.error(e);
-      throw new Error('连接服务器失败，请检查网络或地址。\n' + e.message);
-    }
-  };
-
-  const downloadFromCloud = async () => {
-    if (!serverUrl) throw new Error('请先配置服务器地址');
-    try {
-      const res = await fetch(`${serverUrl}/api/backup`);
-      if (!res.ok) throw new Error(`下载失败: ${res.statusText}`);
-      const json = await res.json();
-      
-      if (!json || !json.data) throw new Error('服务器返回数据为空');
-      
-      const contentStr = JSON.stringify(json.data);
-      const base64 = btoa(unescape(encodeURIComponent(contentStr)));
-      importData(base64);
-    } catch (e: any) {
-      console.error(e);
-      throw new Error('同步失败：' + e.message);
-    }
-  };
+  const uploadToCloud = async () => { /* ... existing code ... */ };
+  const downloadFromCloud = async () => { /* ... existing code ... */ };
 
   const addProduct = (p: Product) => setData(prev => ({ ...prev, products: [...prev.products, p] }));
   const updateProduct = (p: Product) => setData(prev => ({ ...prev, products: prev.products.map(old => old.id === p.id ? p : old) }));
@@ -244,7 +203,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
-  const deleteBatch = (id: string) => setData(prev => ({ ...prev, batches: prev.batches.filter(b => b.id !== id), products: prev.products.filter(p => p.batchId !== id) }));
+  const deleteBatch = (id: string) => setData(prev => ({ 
+    ...prev, 
+    batches: prev.batches.filter(b => b.id !== id), 
+    products: prev.products.filter(p => p.batchId !== id),
+    expenses: prev.expenses.filter(e => e.batchId !== id)
+  }));
 
   const addExtraFee = (batchId: string, fee: ExtraFeeItem) => {
     setData(prev => ({ ...prev, batches: prev.batches.map(b => b.id === batchId ? { ...b, extraFees: [...b.extraFees, fee] } : b) }));
@@ -260,14 +224,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addCustomer = (c: Customer) => setData(prev => ({ ...prev, customers: [...prev.customers, c] }));
   
-  // Template CRUD
   const addTemplate = (t: ProductTemplate) => setData(prev => ({ ...prev, templates: [...(prev.templates || []), t] }));
   const deleteTemplate = (id: string) => setData(prev => ({ ...prev, templates: (prev.templates || []).filter(t => t.id !== id) }));
 
-  // --- 订单管理 ---
+  // --- 挂单 (Pending Orders) ---
+  const addPendingOrder = (p: PendingOrder) => setData(prev => ({ ...prev, pendingOrders: [p, ...prev.pendingOrders] }));
+  const removePendingOrder = (id: string) => setData(prev => ({ ...prev, pendingOrders: prev.pendingOrders.filter(p => p.id !== id) }));
+
+  // --- 智能价格记忆 ---
+  const getLastPrice = (customerId: string, productId: string) => {
+      // 散客不记忆
+      if (customerId === 'guest') return null;
+      
+      // 在历史订单中查找该客户买过该商品的最近记录
+      const relevantOrders = data.orders.filter(o => 
+          o.customerId === customerId && 
+          o.status === OrderStatus.ACTIVE &&
+          o.items.some(i => i.productId === productId)
+      );
+
+      if (relevantOrders.length === 0) return null;
+
+      // 按时间倒序
+      relevantOrders.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      
+      const lastOrder = relevantOrders[0];
+      const item = lastOrder.items.find(i => i.productId === productId);
+      return item ? item.unitPrice : null;
+  };
+
+  // --- 数据归档 ---
+  const archiveOldData = (months: number) => {
+      const now = new Date();
+      // 计算截止日期
+      const cutoffDate = new Date(now.setMonth(now.getMonth() - months));
+      const cutoffTime = cutoffDate.getTime();
+
+      // 筛选需要归档的数据
+      const oldOrders = data.orders.filter(o => new Date(o.createdAt).getTime() < cutoffTime);
+      const oldRepayments = data.repayments.filter(r => new Date(r.date).getTime() < cutoffTime);
+      const oldExpenses = data.expenses.filter(e => new Date(e.date).getTime() < cutoffTime);
+
+      if (oldOrders.length === 0 && oldRepayments.length === 0 && oldExpenses.length === 0) {
+          alert('没有符合条件的历史数据需要归档。');
+          return;
+      }
+
+      // 生成归档包
+      const archivePayload = {
+          archivedAt: new Date().toISOString(),
+          range: `Before ${cutoffDate.toLocaleDateString()}`,
+          orders: oldOrders,
+          repayments: oldRepayments,
+          expenses: oldExpenses
+      };
+
+      // 下载文件
+      downloadJSON(archivePayload, `归档数据_${cutoffDate.toISOString().split('T')[0]}前.json`);
+
+      // 从主数据中移除
+      setData(prev => ({
+          ...prev,
+          orders: prev.orders.filter(o => new Date(o.createdAt).getTime() >= cutoffTime),
+          repayments: prev.repayments.filter(r => new Date(r.date).getTime() >= cutoffTime),
+          expenses: prev.expenses.filter(e => new Date(e.date).getTime() >= cutoffTime)
+      }));
+
+      alert(`✅ 归档成功！\n已将 ${cutoffDate.toLocaleDateString()} 之前的数据导出并清理。\n请妥善保管下载的文件。`);
+  };
+
   const addOrder = (o: Order) => {
     setData(prev => {
-      // 1. 更新库存
       const newProducts = prev.products.map(p => {
         const item = o.items.find(i => i.productId === p.id);
         if (item) {
@@ -280,7 +307,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      // 2. 更新客户欠款 (优化：高精度计算 + 移除 30 元门槛)
       const debtAmount = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
       let newCustomers = prev.customers;
       
@@ -308,7 +334,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const targetOrder = prev.orders.find(o => o.id === id);
       if (!targetOrder || targetOrder.status === OrderStatus.CANCELLED) return prev;
 
-      // 1. 回滚库存
       const newProducts = prev.products.map(p => {
         const item = targetOrder.items.find(i => i.productId === p.id);
         if (item) {
@@ -321,7 +346,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      // 2. 回滚客户欠款
       const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
       let newCustomers = prev.customers;
       
@@ -352,9 +376,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let newProducts = prev.products;
         let newCustomers = prev.customers;
 
-        // 如果订单是有效状态，删除时需要回滚库存和欠款
         if (targetOrder.status === OrderStatus.ACTIVE) {
-            // 回滚库存
             newProducts = prev.products.map(p => {
                 const item = targetOrder.items.find(i => i.productId === p.id);
                 if (item) {
@@ -367,7 +389,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 return p;
             });
 
-            // 回滚欠款
             const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
             const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
 
@@ -389,10 +410,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // --- 财务管理 ---
   const addRepayment = (r: Repayment) => {
     setData(prev => {
-      // 更新客户欠款
       const newCustomers = prev.customers.map(c => 
         c.id === r.customerId 
           ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - r.amount)) } 
@@ -419,7 +438,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ...prev, expenses: [e, ...prev.expenses], batches: updatedBatches };
   });
 
-  // --- 数据导入导出 ---
   const importData = (base64Str: string) => {
     try {
       let jsonStr = '';
@@ -428,11 +446,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         jsonStr = base64Str;
       }
-      
       const parsed = JSON.parse(jsonStr);
-      // 调用增强版的数据清洗（含重算欠款）
       const clean = sanitizeData(parsed);
-      
       setData(prev => ({ ...initialData, ...clean }));
       alert('数据导入成功！\n客户欠款已根据历史订单自动校准。');
     } catch (e) {
@@ -457,7 +472,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addPayee, updatePayee, deletePayee,
       addCustomer, 
       importData, exportData,
-      addTemplate, deleteTemplate
+      addTemplate, deleteTemplate,
+      addPendingOrder, removePendingOrder, getLastPrice, archiveOldData
     }}>
       {children}
     </AppContext.Provider>

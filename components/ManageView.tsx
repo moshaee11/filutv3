@@ -222,6 +222,7 @@ const ManageView: React.FC = () => {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedCustId, setSelectedCustId] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false); // New State for delete confirmation
   
   // Filter States
   const [filterBatchId, setFilterBatchId] = useState<string>('ALL'); // For filters inside sub-views
@@ -249,7 +250,7 @@ const ManageView: React.FC = () => {
   const [adjustForm, setAdjustForm] = useState({ 
     id: '', 
     name: '', 
-    batchName: '', // 新增：用于显示所属车次
+    batchName: '', 
     currentQty: 0, 
     currentWeight: 0,
     initialQty: 0,
@@ -295,7 +296,6 @@ const ManageView: React.FC = () => {
     if (!productForm.name) return alert('请输入商品名称');
     if (!selectedBatchId) return alert('未选择车次');
     
-    // 获取现有商品（如果是编辑模式），以便保留旧的初始库存
     const existing = subView === 'edit_product' ? data.products.find(p => p.id === selectedProductId) : null;
     const inputStock = parseFloat(productForm.stock) || 0;
     const inputWeight = productForm.mode === PricingMode.WEIGHT ? (inputStock * 20) : 0;
@@ -308,7 +308,6 @@ const ManageView: React.FC = () => {
       sellingPrice: parseFloat(productForm.sell) || 0,
       stockQty: inputStock,
       stockWeight: inputWeight,
-      // 关键逻辑：新建时，初始库存=当前库存。编辑时，保留原有初始库存，除非是新创建的修正
       initialStockQty: existing ? existing.initialStockQty : inputStock,
       initialStockWeight: existing ? existing.initialStockWeight : inputWeight,
       defaultTare: parseFloat(productForm.tare) || 0,
@@ -329,7 +328,6 @@ const ManageView: React.FC = () => {
     if (isNaN(qty)) return alert('请输入实际库存件数');
     if (isNaN(initQty)) return alert('请输入初始库存件数');
     
-    // 如果是计重，必须输入重量
     const product = data.products.find(p => p.id === adjustForm.id);
     if (product?.pricingMode === PricingMode.WEIGHT) {
         if (isNaN(weight)) return alert('请输入实际总重量');
@@ -375,7 +373,7 @@ const ManageView: React.FC = () => {
           sell: t.defaultPrice.toString(),
           tare: t.defaultTare.toString(),
           threshold: t.lowStockThreshold.toString(),
-          stock: '' // Keep stock empty for user to fill
+          stock: '' 
       });
       setSubView('add_product');
   };
@@ -385,27 +383,23 @@ const ManageView: React.FC = () => {
     const orders: any[] = data.orders.map(o => ({ ...o, type: 'order' }));
     const repayments: any[] = data.repayments.map(r => ({ ...r, type: 'repayment', createdAt: r.date }));
     
-    // Combine and Sort
     const combined = [...orders, ...repayments].sort((a, b) => 
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
-    // Filter
     return combined.filter(item => {
         if (!item) return false;
-        // Search Filter (checks OrderNo or CustomerName)
         const name = item.customerName || '';
         const no = item.orderNo || '';
         const matchSearch = name.includes(orderSearch) || no.includes(orderSearch);
         
-        // Batch Filter (Only applies to orders effectively, repayments don't usually have batchId unless we track it)
         let matchBatch = true;
         if (filterBatchId !== 'ALL') {
              if (item.type === 'order') {
                  const order = item as Order;
                  matchBatch = order.items.some(i => getProductBatchId(i.productId) === filterBatchId);
              } else {
-                 matchBatch = false; // Hide repayments when filtering by specific batch
+                 matchBatch = false; 
              }
         }
         
@@ -437,7 +431,6 @@ const ManageView: React.FC = () => {
               <p className="font-black text-gray-800">单据查询</p>
               <p className="text-xs text-gray-400 font-bold mt-1">订单与还款记录</p>
            </div>
-           {/* Reconcile and Customers Views restored here */}
            <div onClick={() => setSubView('reconcile')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all">
               <div className="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center mb-3"><Wallet size={24} /></div>
               <p className="font-black text-gray-800">财务核对</p>
@@ -468,7 +461,6 @@ const ManageView: React.FC = () => {
               <button onClick={() => { setBatchForm({plate:'', cost:'', weight:''}); setSubView('add_batch'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black bg-emerald-50 px-3 py-1.5 rounded-full"><Plus size={14}/> 新车入库</button>
            </div>
            
-           {/* 防御性渲染：确保batch存在且有关键属性 */}
            {activeBatches.map(batch => (
               batch && batch.id ? (
                 <div key={batch.id} onClick={() => { setSelectedBatchId(batch.id); setSubView('batch_detail'); }} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 active:scale-[0.98] transition-all flex justify-between items-center">
@@ -641,6 +633,13 @@ const ManageView: React.FC = () => {
                    </div>
                 )) : <div className="text-center text-xs text-gray-300 py-2">暂无额外费用</div>}
              </div>
+             
+             <button 
+                onClick={() => setShowDeleteConfirm(true)}
+                className="w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black text-lg active:bg-red-100 transition-all flex items-center justify-center gap-2 mt-8"
+             >
+                <Trash2 size={20} /> 删除此车次
+             </button>
           </div>
           
           {showFeeModal && (
@@ -653,6 +652,53 @@ const ManageView: React.FC = () => {
                    <button onClick={() => setShowFeeModal(false)} className="w-full text-gray-400 py-2 font-bold">取消</button>
                 </div>
              </div>
+          )}
+
+          {/* Custom Delete Confirmation Modal */}
+          {showDeleteConfirm && (
+            <div className="fixed inset-0 z-[600] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">
+                <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+                    <div className="flex items-center gap-3 text-red-500 mb-1">
+                        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                            <AlertTriangle size={24} strokeWidth={2.5}/>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-black text-gray-900">确认删除车次？</h3>
+                            <p className="text-xs font-bold text-red-500">此操作无法撤销</p>
+                        </div>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 text-sm text-gray-600 space-y-2">
+                        <p>您即将删除：<span className="font-black text-gray-900">{selectedBatch.plateNumber}</span></p>
+                        <div className="h-px bg-gray-200 my-2"></div>
+                        <p className="font-bold">连带删除内容：</p>
+                        <ul className="list-disc pl-4 space-y-1 text-xs">
+                            <li>关联的所有商品及库存</li>
+                            <li>关联的费用支出 (运费/过磅费等)</li>
+                        </ul>
+                    </div>
+
+                    <div className="flex gap-3 pt-2">
+                        <button 
+                            onClick={() => setShowDeleteConfirm(false)} 
+                            className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-xl font-black text-sm active:scale-95 transition-all"
+                        >
+                            我再想想
+                        </button>
+                        <button 
+                            onClick={() => {
+                                deleteBatch(selectedBatch.id);
+                                setShowDeleteConfirm(false);
+                                setSubView('main');
+                                setSelectedBatchId(null);
+                            }}
+                            className="flex-1 py-4 bg-red-500 text-white rounded-xl font-black text-sm shadow-lg shadow-red-200 active:scale-95 transition-all"
+                        >
+                            确认删除
+                        </button>
+                    </div>
+                </div>
+            </div>
           )}
        </div>
     );
