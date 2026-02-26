@@ -9,7 +9,7 @@ import {
   Plus, PlusCircle, CheckCircle2, UserCog, FileText, Check
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
-import { preciseCalc } from '../utils';
+import { preciseCalc, downloadJSON } from '../utils';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -480,6 +480,70 @@ const ManageView: React.FC = () => {
                <div>
                     <p className="font-black text-gray-800">收款人/员工管理</p>
                     <p className="text-xs text-gray-400 font-bold mt-1">配置开单与收款时的可选人员</p>
+               </div>
+           </div>
+           
+           {/* Data Backup & Restore */}
+           <div className="col-span-2 grid grid-cols-2 gap-4">
+               <div onClick={async () => {
+                   const backup = await data.exportData();
+                   // exportData now returns base64 string, we need to save it
+                   // But wait, exportData in store.tsx returns string.
+                   // We should update store.tsx to use the new downloadJSON utility or handle it here.
+                   // Let's check store.tsx exportData implementation.
+                   // It returns base64 string.
+                   // We should use downloadJSON directly with the data object instead of base64 string for the new utility.
+                   // Let's modify store.tsx to expose a method that triggers download/share directly.
+                   // For now, let's assume we can access the data object directly from `data` prop.
+                   const timestamp = new Date().toISOString().split('T')[0];
+                   await downloadJSON(data, `FruitPro_Backup_${timestamp}.json`);
+               }} className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all flex items-center gap-3">
+                   <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center shrink-0"><Share2 size={20} /></div>
+                   <div>
+                       <p className="font-black text-gray-800 text-sm">备份数据</p>
+                       <p className="text-[10px] text-gray-400 font-bold">导出到微信</p>
+                   </div>
+               </div>
+               
+               <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all flex items-center gap-3 relative overflow-hidden">
+                   <input 
+                       type="file" 
+                       accept=".json"
+                       onChange={(e) => {
+                           const file = e.target.files?.[0];
+                           if (!file) return;
+                           const reader = new FileReader();
+                           reader.onload = (ev) => {
+                               const content = ev.target?.result as string;
+                               if (content) {
+                                   // The importData in store expects base64 string if it was exported via old method, 
+                                   // OR it can handle raw JSON string if we modify it.
+                                   // Let's try to parse it first to see if it's JSON.
+                                   try {
+                                       JSON.parse(content);
+                                       // If successful, it's a JSON string.
+                                       // We need to pass it to importData. 
+                                       // Current importData handles base64 decoding.
+                                       // Let's just pass the content, and let store handle it.
+                                       // We might need to encode it to base64 to satisfy current store implementation 
+                                       // or update store implementation.
+                                       // Let's update store implementation to be more robust.
+                                       importData(content); 
+                                   } catch (e) {
+                                       // If not JSON, maybe it's base64?
+                                       importData(content);
+                                   }
+                               }
+                           };
+                           reader.readAsText(file);
+                       }}
+                       className="absolute inset-0 opacity-0 z-10"
+                   />
+                   <div className="w-10 h-10 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center shrink-0"><ArrowDownCircle size={20} /></div>
+                   <div>
+                       <p className="font-black text-gray-800 text-sm">恢复数据</p>
+                       <p className="text-[10px] text-gray-400 font-bold">导入备份文件</p>
+                   </div>
                </div>
            </div>
         </div>

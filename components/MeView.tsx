@@ -7,17 +7,14 @@ import {
   ShieldAlert, UserCircle2, X, ClipboardPaste, ArrowUpRight, Copy, ShieldCheck,
   FileJson, FileUp, FileDown, ExternalLink
 } from 'lucide-react';
-import { downloadCSV, downloadJSON, preciseCalc } from '../utils';
+import { downloadJSON, downloadBase64File, preciseCalc } from '../utils';
 import * as XLSX from 'xlsx';
 
 const MeView: React.FC = () => {
   const { data, exportData, importData } = useApp();
   const [lastBackup, setLastBackup] = useState<string>(localStorage.getItem('LAST_BACKUP_TIME') || '从未备份');
-  const [showWxTransferModal, setShowWxTransferModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
-  const [showWeChatGuide, setShowWeChatGuide] = useState(false); // 新增：微信引导遮罩
   const [pasteContent, setPasteContent] = useState('');
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'success'>('idle');
   const [isPersisted, setIsPersisted] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -37,8 +34,6 @@ const MeView: React.FC = () => {
     initPersistence();
   }, []);
 
-  const isWeChat = () => /MicroMessenger/i.test(navigator.userAgent);
-
   const updateBackupTime = () => {
     const now = new Date().toLocaleString();
     localStorage.setItem('LAST_BACKUP_TIME', now);
@@ -51,8 +46,8 @@ const MeView: React.FC = () => {
     
     try {
         await navigator.clipboard.writeText(jsonStr);
-        setCopyStatus('success');
         updateBackupTime();
+        alert('✅ 数据已复制到剪贴板！');
     } catch (err) {
         try {
             const textarea = document.createElement('textarea');
@@ -64,29 +59,17 @@ const MeView: React.FC = () => {
             textarea.select();
             document.execCommand('copy');
             document.body.removeChild(textarea);
-            setCopyStatus('success');
             updateBackupTime();
+            alert('✅ 数据已复制到剪贴板！');
         } catch (e) {
             alert('复制失败，请手动长按复制数据');
         }
     }
   };
 
-  const handleExportClick = (type: 'excel' | 'copy' | 'file') => {
-    // 微信环境下，点击文件下载，直接拦截并显示引导
-    if ((type === 'excel' || type === 'file') && isWeChat()) {
-        setShowWeChatGuide(true);
-        return;
-    }
-
+  const handleExportClick = async (type: 'excel' | 'copy' | 'file') => {
     if (type === 'copy') {
-        if (isWeChat()) {
-            setShowWxTransferModal(true);
-            handleCopyDataToClipboard();
-        } else {
-            handleCopyDataToClipboard();
-            alert('✅ 数据已复制到剪贴板！\n请粘贴保存到安全的地方（如微信收藏）。');
-        }
+        handleCopyDataToClipboard();
         return;
     }
 
@@ -96,10 +79,9 @@ const MeView: React.FC = () => {
 
     if (type === 'file') {
         const backupData = { ...data, timestamp: Date.now(), type: 'FRUIT_SYNC' };
-        const filename = `水果助手备份_${new Date().toISOString().split('T')[0]}.json`;
-        downloadJSON(backupData, filename);
+        const filename = `FruitPro_Backup_${new Date().toISOString().split('T')[0]}.json`;
+        await downloadJSON(backupData, filename);
         updateBackupTime();
-        alert('✅ 备份文件已生成！\n\n请将下载的 .json 文件发送给对方，或保存到手机文件管理中。\n(推荐使用此方式，数据更安全)');
     }
   };
 
@@ -121,7 +103,7 @@ const MeView: React.FC = () => {
   };
 
   // --- 高级 Excel 导出 (仿照截图格式: 左侧明细，右侧透视) ---
-  const performAdvancedExcelExport = () => {
+  const performAdvancedExcelExport = async () => {
     if (data.orders.length === 0) return alert('暂无订单数据可导出');
 
     // 1. 准备左侧原始数据 (Raw Data)
@@ -220,6 +202,12 @@ const MeView: React.FC = () => {
 
     // 4. 生成文件
     try {
+        // Use downloadCSV for Excel export as well for now, or convert to CSV
+        // Since we are using XLSX library, we can generate XLSX file.
+        // But to share it via Capacitor, we need to write it to filesystem.
+        // XLSX.writeFile tries to download in browser.
+        // We need to get the binary data and use shareFile.
+        
         const ws = XLSX.utils.aoa_to_sheet(finalData);
         // 设置大致列宽
         ws['!cols'] = [
@@ -230,7 +218,12 @@ const MeView: React.FC = () => {
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "经营报表");
-        XLSX.writeFile(wb, `经营报表_${new Date().toISOString().split('T')[0]}.xlsx`);
+        
+        // Generate base64 string
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+        
+        await downloadBase64File(`经营报表_${new Date().toISOString().split('T')[0]}.xlsx`, wbout, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
     } catch (e) {
         console.error(e);
         alert('导出失败: Excel 组件加载错误。请确保网络连接正常。');
@@ -401,71 +394,6 @@ const MeView: React.FC = () => {
            <p className="text-[10px] text-gray-300 font-bold">Fruit Pro Assistant v3.0.7</p>
         </div>
       </div>
-
-      {/* 微信导出防拦截引导弹窗 */}
-      {showWeChatGuide && (
-         <div 
-           className="fixed inset-0 z-[1000] bg-black/90 text-white flex flex-col items-center pt-10 px-6 animate-in fade-in"
-           onClick={() => setShowWeChatGuide(false)}
-         >
-             <div className="absolute top-4 right-8 animate-bounce">
-                <ArrowUpRight size={48} className="text-emerald-400 stroke-[3px]" />
-             </div>
-             <div className="mt-16 text-center space-y-6">
-                 <div className="w-20 h-20 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <ExternalLink size={40} className="text-emerald-400"/>
-                 </div>
-                 <h2 className="text-2xl font-black">请在浏览器打开</h2>
-                 <p className="text-gray-300 text-sm font-bold leading-relaxed px-4">
-                     微信无法直接下载文件。<br/>
-                     请点击右上角 <span className="text-white">●●●</span> 菜单<br/>
-                     选择 <span className="text-emerald-400">在浏览器打开</span> 即可下载。
-                 </p>
-                 <button className="mt-8 px-8 py-3 bg-white/10 rounded-full font-bold text-sm border border-white/20">我知道了</button>
-             </div>
-         </div>
-      )}
-
-      {/* 微信数据迁移向导 */}
-      {showWxTransferModal && (
-        <div className="fixed inset-0 z-[999] bg-black/90 flex flex-col text-white px-6 pt-12 animate-in fade-in">
-             <div className="absolute top-4 right-6 animate-bounce">
-                <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold">去微信对话框</span>
-                    <ArrowUpRight size={32} className="stroke-[3px]" />
-                </div>
-            </div>
-
-            <div className="mt-8 space-y-8">
-                <div>
-                    <h3 className="text-3xl font-black mb-2 text-emerald-400">数据已复制！</h3>
-                    <p className="text-base font-medium opacity-80 leading-relaxed">
-                        注意：如果数据量很大，微信可能会截断文本。
-                    </p>
-                </div>
-                
-                <div className="space-y-6">
-                    <div className="bg-white/10 p-5 rounded-2xl border border-white/10">
-                         <div className="flex justify-between items-center mb-2">
-                            <span className="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs font-black">推荐做法</span>
-                        </div>
-                        <p className="text-sm font-bold">请尽量使用“导出备份文件”功能，发送文件最安全。</p>
-                    </div>
-                    
-                    <div className="bg-white/5 p-5 rounded-2xl border border-white/5 opacity-80">
-                         <div className="flex justify-between items-center mb-2">
-                            <span className="bg-gray-600 text-white px-2 py-0.5 rounded text-xs font-black">强制粘贴</span>
-                        </div>
-                        <p className="text-sm font-bold">如果仍要粘贴文本：在聊天框长按 → 粘贴 → 发送。</p>
-                    </div>
-                </div>
-
-                <div className="pt-4 flex justify-center">
-                    <button onClick={() => setShowWxTransferModal(false)} className="text-gray-400 text-sm font-bold underline">我已完成发送</button>
-                </div>
-            </div>
-        </div>
-      )}
 
       {/* 粘贴导入弹窗 */}
       {showPasteModal && (

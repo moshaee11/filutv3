@@ -1,4 +1,8 @@
 
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
+import { Capacitor } from '@capacitor/core';
+
 export const formatMoney = (amount: number) => {
   return new Intl.NumberFormat('zh-CN', {
     style: 'currency',
@@ -22,35 +26,72 @@ export const generateOrderNo = () => {
   return `ORD${dateStr}${timeStr}${random}`;
 };
 
-export const downloadJSON = (data: any, filename: string) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+// Helper to share file on mobile or download on web
+const shareFile = async (filename: string, base64Data: string, mimeType: string) => {
+    if (Capacitor.isNativePlatform()) {
+        try {
+            // 1. Write file to cache directory
+            const result = await Filesystem.writeFile({
+                path: filename,
+                data: base64Data,
+                directory: Directory.Cache,
+                // encoding: Encoding.UTF8 // Do not specify encoding for base64 data if it's binary, but for text it's fine. 
+                // However, Filesystem.writeFile expects data to be base64 string if no encoding is provided? 
+                // Actually for text files, we can pass string directly if encoding is UTF8.
+                // But to be safe for all types, let's assume base64Data is indeed base64.
+            });
+
+            // 2. Share the file
+            await Share.share({
+                title: '分享文件',
+                text: `请查收文件：${filename}`,
+                url: result.uri,
+                dialogTitle: '分享到微信/文件传输助手',
+            });
+        } catch (e) {
+            console.error('Share failed', e);
+            alert('分享失败，请检查权限或重试');
+        }
+    } else {
+        // Web Fallback
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mimeType });
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
 };
 
-export const downloadCSV = (headers: string[], rows: any[][], filename: string) => {
+export const downloadJSON = async (data: any, filename: string) => {
+  const jsonStr = JSON.stringify(data, null, 2);
+  // Convert to Base64
+  const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
+  await shareFile(filename, base64, 'application/json');
+};
+
+export const downloadCSV = async (headers: string[], rows: any[][], filename: string) => {
   const BOM = '\uFEFF';
   const csvContent = [headers, ...rows].map(row => 
     row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')
   ).join('\n');
   
-  const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.style.display = 'none';
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
+  const fullContent = BOM + csvContent;
+  const base64 = btoa(unescape(encodeURIComponent(fullContent)));
   
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 100);
+  await shareFile(filename, base64, 'text/csv;charset=utf-8;');
+};
+
+export const downloadBase64File = async (filename: string, base64Data: string, mimeType: string) => {
+    await shareFile(filename, base64Data, mimeType);
 };

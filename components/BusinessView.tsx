@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
-import { preciseCalc } from '../utils';
+import { preciseCalc, downloadCSV } from '../utils';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
@@ -558,8 +558,53 @@ const BusinessView: React.FC = () => {
     return { wechat, alipay, cash, revenue, debtIncrease, expenses: totalExpense, balance, chartData, totalRepaid };
   }, [filteredData, filterBatchId, data.products]);
 
-  const handleExport = () => {
-    alert('请前往“我的”页面进行完整数据导出。');
+  const handleExport = async () => {
+    // Export filtered data to CSV
+    const { orders, expenses } = filteredData;
+    
+    // 1. Orders CSV
+    const orderHeaders = ['订单号', '时间', '客户', '商品明细', '总金额', '优惠', '实收', '支付方式', '收款人', '状态'];
+    const orderRows = orders.map(o => [
+        o.orderNo,
+        new Date(o.createdAt).toLocaleString(),
+        o.customerName,
+        o.items.map(i => `${i.productName}x${i.qty}`).join('; '),
+        o.totalAmount,
+        o.discount,
+        o.receivedAmount,
+        o.paymentMethod,
+        o.payee,
+        o.status
+    ]);
+    
+    // 2. Expenses CSV
+    const expenseHeaders = ['时间', '类型', '金额', '备注', '车次ID'];
+    const expenseRows = expenses.map(e => [
+        new Date(e.date).toLocaleString(),
+        e.type,
+        e.amount,
+        e.note || '',
+        e.batchId || ''
+    ]);
+
+    const timestamp = new Date().toISOString().split('T')[0];
+    
+    // Download Orders
+    if (orderRows.length > 0) {
+        await downloadCSV(orderHeaders, orderRows, `Orders_${timestamp}.csv`);
+    }
+    
+    // Download Expenses
+    if (expenseRows.length > 0) {
+        // Small delay to ensure both downloads trigger if on web, or sequential share on mobile
+        setTimeout(async () => {
+             await downloadCSV(expenseHeaders, expenseRows, `Expenses_${timestamp}.csv`);
+        }, 1000);
+    }
+
+    if (orderRows.length === 0 && expenseRows.length === 0) {
+        alert('当前筛选条件下没有数据可导出');
+    }
   };
 
   if (showPivotTable) {
