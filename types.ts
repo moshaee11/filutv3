@@ -47,6 +47,7 @@ export interface Product {
   costPrice?: number;
   sellingPrice?: number;
   lowStockThreshold?: number;
+  unitWeight?: number; // 新增：单件标准重量 (用于按件计价时的成本分摊)
 }
 
 export interface Batch {

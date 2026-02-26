@@ -6,9 +6,10 @@ import {
   Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
   Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
-  Plus, PlusCircle, CheckCircle2, UserCog, FileText
+  Plus, PlusCircle, CheckCircle2, UserCog, FileText, Check
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
+import { preciseCalc } from '../utils';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -124,8 +125,8 @@ const BatchFormFields: React.FC<{
 );
 
 const ProductFormFields: React.FC<{
-  productForm: { name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string };
-  setProductForm: React.Dispatch<React.SetStateAction<{ name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string }>>;
+  productForm: { name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string; unitWeight: string };
+  setProductForm: React.Dispatch<React.SetStateAction<{ name: string; category: string; mode: PricingMode; sell: string; stock: string; tare: string; threshold: string; unitWeight: string }>>;
   onOpenTemplates?: () => void;
 }> = ({ productForm, setProductForm, onOpenTemplates }) => (
   <div className="space-y-5"> 
@@ -198,7 +199,18 @@ const ProductFormFields: React.FC<{
             className="w-full mt-1 bg-gray-100 p-5 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all text-center" 
           />
         </div>
-      ) : <div />}
+      ) : (
+        <div className="animate-in fade-in">
+          <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">单件标准重量 (斤)</label>
+          <input 
+            value={productForm.unitWeight} 
+            onChange={e => setProductForm({...productForm, unitWeight: e.target.value})} 
+            type="number"
+            placeholder="0.0"
+            className="w-full mt-1 bg-gray-100 p-5 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all text-center" 
+          />
+        </div>
+      )}
       
       <div>
         <label className="text-xs font-bold text-red-400 uppercase tracking-wider px-1">预警件数 (低于变红)</label>
@@ -234,9 +246,13 @@ const ManageView: React.FC = () => {
   const [feeForm, setFeeForm] = useState({ name: '运费', amount: '' });
   const [newPayeeName, setNewPayeeName] = useState('');
 
+  // Payee Edit State
+  const [editingPayee, setEditingPayee] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+
   // Forms
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
-  const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' });
+  const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '', unitWeight: '' });
   
   // Template Form (Reusable)
   const [isAddingTemplate, setIsAddingTemplate] = useState(false);
@@ -261,13 +277,13 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, deletePayee, addTemplate, deleteTemplate } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
   const selectedProduct = useMemo(() => data.products.find(p => p.id === selectedProductId), [data.products, selectedProductId]);
 
-  const activeBatches = useMemo(() => data.batches.filter(b => b && !b.isClosed), [data.batches]);
+  const activeBatches = useMemo(() => data.batches.filter(b => b && !b.isClosed).sort((a, b) => new Date(b.inboundDate).getTime() - new Date(a.inboundDate).getTime()), [data.batches]);
   
   // Helper to find which batch a product belongs to
   const getProductBatchId = (productId: string) => {
@@ -312,7 +328,8 @@ const ManageView: React.FC = () => {
       initialStockWeight: existing ? existing.initialStockWeight : inputWeight,
       defaultTare: parseFloat(productForm.tare) || 0,
       batchId: selectedBatchId,
-      lowStockThreshold: parseFloat(productForm.threshold) || 20
+      lowStockThreshold: parseFloat(productForm.threshold) || 20,
+      unitWeight: parseFloat(productForm.unitWeight) || 0
     };
     if (subView === 'edit_product') updateProduct(newProduct);
     else addProduct(newProduct);
@@ -351,6 +368,17 @@ const ManageView: React.FC = () => {
     setNewPayeeName('');
   };
 
+  const handleUpdatePayee = () => {
+      if (!editingPayee || !editName.trim()) return;
+      if (editName.trim() !== editingPayee && data.payees.includes(editName.trim())) {
+          alert('该名字已存在');
+          return;
+      }
+      updatePayee(editingPayee, editName.trim());
+      setEditingPayee(null);
+      setEditName('');
+  };
+
   const handleSaveTemplate = () => {
     if (!templateForm.name) return alert('请输入模板名称');
     addTemplate({
@@ -373,7 +401,8 @@ const ManageView: React.FC = () => {
           sell: t.defaultPrice.toString(),
           tare: t.defaultTare.toString(),
           threshold: t.lowStockThreshold.toString(),
-          stock: '' 
+          stock: '',
+          unitWeight: ''
       });
       setSubView('add_product');
   };
@@ -504,14 +533,41 @@ const ManageView: React.FC = () => {
               <div className="space-y-3">
                   <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest">现有人员列表</p>
                   {data.payees.map(p => (
-                      <div key={p} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
-                          <span className="font-black text-gray-800">{p}</span>
-                          <button 
-                            onClick={() => { if(confirm(`确定要删除“${p}”吗？`)) deletePayee(p); }}
-                            className="text-red-400 p-2 bg-red-50 rounded-xl active:bg-red-100 transition-colors"
-                          >
-                              <Trash2 size={16} />
-                          </button>
+                      <div key={p} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center transition-all">
+                          {editingPayee === p ? (
+                              <div className="flex items-center gap-2 flex-1 animate-in fade-in">
+                                  <input 
+                                    autoFocus
+                                    value={editName}
+                                    onChange={e => setEditName(e.target.value)}
+                                    className="flex-1 bg-gray-50 px-3 py-2 rounded-lg font-black text-gray-800 outline-none focus:ring-2 ring-emerald-100"
+                                  />
+                                  <button onClick={handleUpdatePayee} className="p-2 bg-emerald-50 text-emerald-600 rounded-lg active:bg-emerald-100">
+                                      <Check size={18} />
+                                  </button>
+                                  <button onClick={() => setEditingPayee(null)} className="p-2 bg-gray-50 text-gray-400 rounded-lg active:bg-gray-100">
+                                      <X size={18} />
+                                  </button>
+                              </div>
+                          ) : (
+                              <>
+                                <span className="font-black text-gray-800">{p}</span>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => { setEditingPayee(p); setEditName(p); }}
+                                        className="text-blue-400 p-2 bg-blue-50 rounded-xl active:bg-blue-100 transition-colors"
+                                    >
+                                        <Edit2 size={16} />
+                                    </button>
+                                    <button 
+                                        onClick={() => { if(confirm(`确定要删除“${p}”吗？`)) deletePayee(p); }}
+                                        className="text-red-400 p-2 bg-red-50 rounded-xl active:bg-red-100 transition-colors"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                              </>
+                          )}
                       </div>
                   ))}
                   {data.payees.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">暂无人员，请添加</div>}
@@ -585,6 +641,31 @@ const ManageView: React.FC = () => {
   // 3. Batch Detail View
   if (subView === 'batch_detail' && selectedBatch) {
     const products = data.products.filter(p => p.batchId === selectedBatchId);
+    
+    // --- Dynamic Cost Logic ---
+    const totalCost = selectedBatch.cost + selectedBatch.extraFees.reduce((sum, f) => sum + f.amount, 0);
+    
+    const recoveredRevenue = data.orders
+        .filter(o => o.status === OrderStatus.ACTIVE)
+        .reduce((sum, order) => {
+            const batchItems = order.items.filter(i => getProductBatchId(i.productId) === selectedBatchId);
+            const batchRevenue = batchItems.reduce((s, i) => s + i.subtotal, 0);
+            return sum + batchRevenue;
+        }, 0);
+
+    const remainingDebt = Math.max(0, totalCost - recoveredRevenue);
+    
+    const remainingInventoryWeight = products.reduce((sum, p) => {
+        if (p.pricingMode === PricingMode.WEIGHT) {
+            return sum + p.stockWeight;
+        } else {
+            return sum + (p.stockQty * (p.unitWeight || 0));
+        }
+    }, 0);
+    
+    const dynamicUnitCost = remainingInventoryWeight > 0 ? remainingDebt / remainingInventoryWeight : 0;
+    // --------------------------
+
     return (
        <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
           <header className="bg-[#2D3142] text-white p-6 pb-12 rounded-b-[2.5rem] shadow-xl shrink-0">
@@ -605,14 +686,61 @@ const ManageView: React.FC = () => {
           </header>
           
           <div className="flex-1 overflow-y-auto px-4 -mt-8 space-y-4 pb-32 no-scrollbar">
+             {/* Dynamic Cost Card */}
+             <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-6 rounded-[2rem] shadow-lg text-white space-y-4">
+                <div className="flex items-center gap-2 opacity-80">
+                    <TrendingUp size={18} />
+                    <h3 className="font-black text-sm uppercase tracking-wider">动态成本分析</h3>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-sm">
+                        <p className="text-[10px] opacity-70 mb-1">待回本资金 (敞口)</p>
+                        <p className="text-2xl font-black">¥{remainingDebt.toFixed(0)}</p>
+                        <p className="text-[10px] opacity-50 mt-1">总投 {totalCost} - 已回 {recoveredRevenue.toFixed(0)}</p>
+                    </div>
+                    <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-sm">
+                        <p className="text-[10px] opacity-70 mb-1">死水斤价 (保底)</p>
+                        <p className="text-2xl font-black">¥{dynamicUnitCost.toFixed(2)}<span className="text-xs font-normal">/斤</span></p>
+                        <p className="text-[10px] opacity-50 mt-1">剩余库存折算 {remainingInventoryWeight.toFixed(0)}斤</p>
+                    </div>
+                </div>
+
+                <div className="bg-black/20 p-4 rounded-2xl backdrop-blur-sm space-y-2">
+                    <p className="text-[10px] opacity-70 uppercase font-bold">各规格保底售价 (不亏本)</p>
+                    {products.map(p => {
+                        const unitWeight = p.pricingMode === PricingMode.WEIGHT ? 1 : (p.unitWeight || 0);
+                        const breakEvenPrice = dynamicUnitCost * unitWeight;
+                        if (unitWeight <= 0) return null;
+                        
+                        return (
+                            <div key={p.id} className="flex justify-between items-center text-sm">
+                                <span className="opacity-90">{p.name}</span>
+                                <span className="font-mono font-bold">
+                                    ¥{breakEvenPrice.toFixed(2)}
+                                    <span className="text-[10px] opacity-60">/{p.pricingMode === PricingMode.WEIGHT ? '斤' : '件'}</span>
+                                </span>
+                            </div>
+                        );
+                    })}
+                    {products.length === 0 && <p className="text-xs opacity-50 text-center">暂无商品</p>}
+                </div>
+             </div>
+
              <div className="bg-white p-6 rounded-[2rem] shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                    <h3 className="font-black text-gray-800">关联商品</h3>
-                   <button onClick={() => { setSelectedBatchId(selectedBatch.id); setProductForm({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '' }); setSubView('add_product'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black"><PlusCircle size={14}/> 添加商品</button>
+                   <button onClick={() => { setSelectedBatchId(selectedBatch.id); setProductForm({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '', unitWeight: '' }); setSubView('add_product'); }} className="flex items-center gap-1 text-emerald-600 text-xs font-black"><PlusCircle size={14}/> 添加商品</button>
                 </div>
                 {products.map(p => (
-                   <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice?.toString() || '0', stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
-                      <div><p className="font-black text-gray-800">{p.name}</p><p className="text-xs text-gray-400 font-bold">库存: {p.stockQty} / <span className="text-gray-300">{p.initialStockQty}(原)</span></p></div>
+                   <div key={p.id} onClick={() => { setSelectedProductId(p.id); setProductForm({ name: p.name, category: p.category, mode: p.pricingMode, sell: p.sellingPrice?.toString() || '0', stock: p.stockQty.toString(), tare: p.defaultTare.toString(), threshold: p.lowStockThreshold?.toString() || '20', unitWeight: p.unitWeight?.toString() || '' }); setSubView('edit_product'); }} className="flex justify-between items-center p-3 bg-gray-50 rounded-2xl active:bg-gray-100 transition-colors">
+                      <div>
+                        <p className="font-black text-gray-800">{p.name}</p>
+                        <p className="text-xs text-gray-400 font-bold">
+                            库存: {p.stockQty} 
+                            {p.pricingMode === PricingMode.PIECE && p.unitWeight ? <span className="text-gray-300 ml-1">({p.unitWeight}斤/件)</span> : ''}
+                        </p>
+                      </div>
                       <Edit2 size={16} className="text-gray-300" />
                    </div>
                 ))}
