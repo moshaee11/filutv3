@@ -1321,6 +1321,26 @@ const ManageView: React.FC = () => {
       const debtCustomers = data.customers.filter(c => c && c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
       const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);
 
+      // Simple Classification Logic
+      const classifyCustomer = (customer: any) => {
+          // Find last order date
+          const customerOrders = data.orders.filter(o => o.customerId === customer.id && o.status === OrderStatus.ACTIVE);
+          if (customerOrders.length === 0) return { label: '新欠款', color: 'text-gray-500', bg: 'bg-gray-100' };
+          
+          const lastOrderDate = new Date(Math.max(...customerOrders.map(o => new Date(o.createdAt).getTime())));
+          const daysSinceLastOrder = (new Date().getTime() - lastOrderDate.getTime()) / (1000 * 3600 * 24);
+
+          if (daysSinceLastOrder > 30) {
+              return { label: '呆账预警 (超30天未拿货)', color: 'text-red-600', bg: 'bg-red-100' };
+          } else if (daysSinceLastOrder > 15) {
+              return { label: '需催款 (超15天未拿货)', color: 'text-orange-600', bg: 'bg-orange-100' };
+          } else if (customer.totalDebt > 10000) {
+              return { label: '大额欠款', color: 'text-purple-600', bg: 'bg-purple-100' };
+          } else {
+              return { label: '活跃客户', color: 'text-emerald-600', bg: 'bg-emerald-100' };
+          }
+      };
+
       return (
          <SubViewShell 
             title="应收账款" 
@@ -1333,23 +1353,31 @@ const ManageView: React.FC = () => {
              </div>
              
              <div className="space-y-3">
-                 {debtCustomers.filter(c => c.name.includes(custSearch)).map(c => (
+                 {debtCustomers.filter(c => c.name.includes(custSearch)).map(c => {
+                     const classification = classifyCustomer(c);
+                     return (
                      <div key={c.id} className="bg-white p-5 rounded-[1.5rem] flex justify-between items-center shadow-sm border border-gray-50">
                          <div>
-                             <p className="font-black text-gray-800 text-lg">{c.name}</p>
-                             <p className="text-xs text-gray-400 font-bold">电话: {c.phone || '未记录'}</p>
+                             <div className="flex items-center gap-2">
+                                 <p className="font-black text-gray-800 text-lg">{c.name}</p>
+                                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${classification.bg} ${classification.color}`}>
+                                     {classification.label}
+                                 </span>
+                             </div>
+                             <p className="text-xs text-gray-400 font-bold mt-1">电话: {c.phone || '未记录'}</p>
                          </div>
                          <div className="text-right">
                              <p className="text-xl font-black text-red-500">¥{c.totalDebt.toLocaleString()}</p>
                              <p className="text-[10px] text-gray-400 font-bold">欠款</p>
                          </div>
                      </div>
-                 ))}
+                 )})}
                  {debtCustomers.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">没有欠款客户，经营状况良好！</div>}
              </div>
          </SubViewShell>
       );
   }
+
 
   return null;
 };
