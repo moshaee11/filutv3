@@ -1316,7 +1316,7 @@ const ManageView: React.FC = () => {
       );
   }
 
-  // 10. Customers View (Same as before)
+  // 10. Customers View
   if (subView === 'customers') {
       const debtCustomers = data.customers.filter(c => c && c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
       const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);
@@ -1341,6 +1341,23 @@ const ManageView: React.FC = () => {
           }
       };
 
+      // Calculate debt by payee
+      const debtByPayee: Record<string, number> = {};
+      data.payees.forEach(p => debtByPayee[p] = 0);
+      
+      data.orders.filter(o => o.status === OrderStatus.ACTIVE && o.totalAmount > o.receivedAmount + o.discount).forEach(o => {
+          const debt = o.totalAmount - o.receivedAmount - o.discount;
+          if (o.payee) {
+              debtByPayee[o.payee] = (debtByPayee[o.payee] || 0) + debt;
+          }
+      });
+      // Subtract repayments
+      data.repayments.forEach(r => {
+          if (r.payee && debtByPayee[r.payee] !== undefined) {
+              debtByPayee[r.payee] -= r.amount;
+          }
+      });
+
       return (
          <SubViewShell 
             title="应收账款" 
@@ -1351,25 +1368,70 @@ const ManageView: React.FC = () => {
                  <div><p className="text-xs text-red-400 font-black uppercase tracking-widest">总应收款</p><p className="text-3xl font-black text-red-500">¥{totalReceivable.toLocaleString()}</p></div>
                  <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-red-500 shadow-sm"><Users size={24}/></div>
              </div>
+
+             {/* 经手人欠款汇总 */}
+             <div className="mb-6 space-y-2">
+                 <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest">按经手人汇总</p>
+                 <div className="flex overflow-x-auto gap-3 pb-2 no-scrollbar px-1">
+                     {Object.entries(debtByPayee).filter(([_, amount]) => amount > 0).map(([payee, amount]) => (
+                         <div key={payee} className="bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm shrink-0 min-w-[120px]">
+                             <p className="text-xs text-gray-400 font-bold mb-1">{payee}</p>
+                             <p className="text-lg font-black text-gray-800">¥{amount.toLocaleString()}</p>
+                         </div>
+                     ))}
+                     {Object.values(debtByPayee).every(a => a <= 0) && (
+                         <div className="text-xs text-gray-400 px-2">暂无经手人欠款数据</div>
+                     )}
+                 </div>
+             </div>
              
              <div className="space-y-3">
+                 <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest">客户明细</p>
                  {debtCustomers.filter(c => c.name.includes(custSearch)).map(c => {
                      const classification = classifyCustomer(c);
+                     
+                     // 计算该客户欠每个经手人多少钱
+                     const customerDebtByPayee: Record<string, number> = {};
+                     data.orders.filter(o => o.customerId === c.id && o.status === OrderStatus.ACTIVE && o.totalAmount > o.receivedAmount + o.discount).forEach(o => {
+                         const debt = o.totalAmount - o.receivedAmount - o.discount;
+                         if (o.payee) customerDebtByPayee[o.payee] = (customerDebtByPayee[o.payee] || 0) + debt;
+                     });
+                     data.repayments.filter(r => r.customerId === c.id).forEach(r => {
+                         if (r.payee && customerDebtByPayee[r.payee] !== undefined) {
+                             customerDebtByPayee[r.payee] -= r.amount;
+                         }
+                     });
+
                      return (
-                     <div key={c.id} className="bg-white p-5 rounded-[1.5rem] flex justify-between items-center shadow-sm border border-gray-50">
-                         <div>
-                             <div className="flex items-center gap-2">
-                                 <p className="font-black text-gray-800 text-lg">{c.name}</p>
-                                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${classification.bg} ${classification.color}`}>
-                                     {classification.label}
-                                 </span>
+                     <div key={c.id} className="bg-white p-5 rounded-[1.5rem] flex flex-col gap-3 shadow-sm border border-gray-50">
+                         <div className="flex justify-between items-center">
+                             <div>
+                                 <div className="flex items-center gap-2">
+                                     <p className="font-black text-gray-800 text-lg">{c.name}</p>
+                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${classification.bg} ${classification.color}`}>
+                                         {classification.label}
+                                     </span>
+                                 </div>
+                                 <p className="text-xs text-gray-400 font-bold mt-1">电话: {c.phone || '未记录'}</p>
                              </div>
-                             <p className="text-xs text-gray-400 font-bold mt-1">电话: {c.phone || '未记录'}</p>
+                             <div className="text-right">
+                                 <p className="text-xl font-black text-red-500">¥{c.totalDebt.toLocaleString()}</p>
+                                 <p className="text-[10px] text-gray-400 font-bold">总欠款</p>
+                             </div>
                          </div>
-                         <div className="text-right">
-                             <p className="text-xl font-black text-red-500">¥{c.totalDebt.toLocaleString()}</p>
-                             <p className="text-[10px] text-gray-400 font-bold">欠款</p>
-                         </div>
+                         
+                         {/* 展示该客户的经手人欠款明细 */}
+                         {Object.entries(customerDebtByPayee).filter(([_, amt]) => amt > 0).length > 0 && (
+                             <div className="bg-gray-50 rounded-xl p-3 flex flex-wrap gap-3">
+                                 {Object.entries(customerDebtByPayee).filter(([_, amt]) => amt > 0).map(([payee, amt]) => (
+                                     <div key={payee} className="flex items-center gap-1.5">
+                                         <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
+                                         <span className="text-xs text-gray-500 font-bold">{payee}:</span>
+                                         <span className="text-xs font-black text-gray-800">¥{amt.toLocaleString()}</span>
+                                     </div>
+                                 ))}
+                             </div>
+                         )}
                      </div>
                  )})}
                  {debtCustomers.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">没有欠款客户，经营状况良好！</div>}
