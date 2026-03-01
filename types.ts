@@ -31,6 +31,7 @@ export interface ProductTemplate {
   defaultTare: number;
   defaultPrice: number;
   lowStockThreshold: number;
+  unitWeight?: number;
 }
 
 export interface Product {

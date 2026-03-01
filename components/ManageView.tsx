@@ -190,7 +190,7 @@ const ProductFormFields: React.FC<{
     <div className="grid grid-cols-2 gap-4">
       {productForm.mode === PricingMode.WEIGHT ? (
         <div className="animate-in fade-in">
-          <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">默认皮重 (斤/件)</label>
+          <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">默认皮重 (小框/斤)</label>
           <input 
             value={productForm.tare} 
             onChange={e => setProductForm({...productForm, tare: e.target.value})} 
@@ -212,7 +212,33 @@ const ProductFormFields: React.FC<{
         </div>
       )}
       
-      <div>
+      {productForm.mode === PricingMode.WEIGHT ? (
+        <div className="animate-in fade-in">
+          <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">预估单件毛重 (大框/斤)</label>
+          <input 
+            value={productForm.unitWeight} 
+            onChange={e => setProductForm({...productForm, unitWeight: e.target.value})} 
+            type="number"
+            placeholder="如: 20"
+            className="w-full mt-1 bg-gray-100 p-5 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all text-center" 
+          />
+        </div>
+      ) : (
+        <div>
+          <label className="text-xs font-bold text-red-400 uppercase tracking-wider px-1">预警件数 (低于变红)</label>
+          <input 
+            value={productForm.threshold} 
+            onChange={e => setProductForm({...productForm, threshold: e.target.value})} 
+            type="number"
+            placeholder="20"
+            className="w-full mt-1 bg-red-50 p-5 rounded-2xl font-bold text-lg text-red-500 border-2 border-transparent focus:border-red-400 focus:bg-white outline-none transition-all text-center placeholder-red-200" 
+          />
+        </div>
+      )}
+    </div>
+    
+    {productForm.mode === PricingMode.WEIGHT && (
+      <div className="animate-in fade-in">
         <label className="text-xs font-bold text-red-400 uppercase tracking-wider px-1">预警件数 (低于变红)</label>
         <input 
           value={productForm.threshold} 
@@ -222,7 +248,7 @@ const ProductFormFields: React.FC<{
           className="w-full mt-1 bg-red-50 p-5 rounded-2xl font-bold text-lg text-red-500 border-2 border-transparent focus:border-red-400 focus:bg-white outline-none transition-all text-center placeholder-red-200" 
         />
       </div>
-    </div>
+    )}
   </div>
 );
 
@@ -256,7 +282,7 @@ const ManageView: React.FC = () => {
   
   // Template Form (Reusable)
   const [isAddingTemplate, setIsAddingTemplate] = useState(false);
-  const [templateForm, setTemplateForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', tare: '0', threshold: '' });
+  const [templateForm, setTemplateForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', tare: '0', threshold: '', unitWeight: '' });
 
   // Reconcile States
   const [reconcileDate, setReconcileDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -314,7 +340,8 @@ const ManageView: React.FC = () => {
     
     const existing = subView === 'edit_product' ? data.products.find(p => p.id === selectedProductId) : null;
     const inputStock = parseFloat(productForm.stock) || 0;
-    const inputWeight = productForm.mode === PricingMode.WEIGHT ? (inputStock * 20) : 0;
+    const estimatedUnitWeight = parseFloat(productForm.unitWeight) || 0;
+    const inputWeight = productForm.mode === PricingMode.WEIGHT ? (inputStock * estimatedUnitWeight) : 0;
 
     const newProduct: Product = {
       id: subView === 'edit_product' && selectedProductId ? selectedProductId : Date.now().toString(),
@@ -329,7 +356,7 @@ const ManageView: React.FC = () => {
       defaultTare: parseFloat(productForm.tare) || 0,
       batchId: selectedBatchId,
       lowStockThreshold: parseFloat(productForm.threshold) || 20,
-      unitWeight: parseFloat(productForm.unitWeight) || 0
+      unitWeight: estimatedUnitWeight
     };
     if (subView === 'edit_product') updateProduct(newProduct);
     else addProduct(newProduct);
@@ -388,7 +415,8 @@ const ManageView: React.FC = () => {
         pricingMode: templateForm.mode,
         defaultPrice: parseFloat(templateForm.sell) || 0,
         defaultTare: parseFloat(templateForm.tare) || 0,
-        lowStockThreshold: parseFloat(templateForm.threshold) || 20
+        lowStockThreshold: parseFloat(templateForm.threshold) || 20,
+        unitWeight: parseFloat(templateForm.unitWeight) || 0
     });
     setIsAddingTemplate(false);
   };
@@ -402,7 +430,7 @@ const ManageView: React.FC = () => {
           tare: t.defaultTare.toString(),
           threshold: t.lowStockThreshold.toString(),
           stock: '',
-          unitWeight: ''
+          unitWeight: t.unitWeight?.toString() || ''
       });
       setSubView('add_product');
   };
@@ -656,7 +684,11 @@ const ManageView: React.FC = () => {
                          <input value={templateForm.name} onChange={e => setTemplateForm({...templateForm, name: e.target.value})} placeholder="模板名称 (如: 砂糖橘-大框)" className="w-full bg-white px-3 py-2 rounded-lg text-sm font-bold" />
                          <div className="grid grid-cols-2 gap-2">
                              <input type="number" value={templateForm.sell} onChange={e => setTemplateForm({...templateForm, sell: e.target.value})} placeholder="默认售价" className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
-                             <input type="number" value={templateForm.tare} onChange={e => setTemplateForm({...templateForm, tare: e.target.value})} placeholder="默认皮重" className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                             <input type="number" value={templateForm.tare} onChange={e => setTemplateForm({...templateForm, tare: e.target.value})} placeholder={templateForm.mode === PricingMode.WEIGHT ? "默认皮重 (小框)" : "默认皮重"} className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                         </div>
+                         <div className="grid grid-cols-2 gap-2">
+                             <input type="number" value={templateForm.unitWeight} onChange={e => setTemplateForm({...templateForm, unitWeight: e.target.value})} placeholder={templateForm.mode === PricingMode.WEIGHT ? "预估单件毛重 (大框)" : "单件标准重量"} className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
+                             <input type="number" value={templateForm.threshold} onChange={e => setTemplateForm({...templateForm, threshold: e.target.value})} placeholder="预警件数" className="bg-white px-3 py-2 rounded-lg text-sm font-bold" />
                          </div>
                          <div className="flex gap-2">
                              <button onClick={() => setTemplateForm({...templateForm, mode: PricingMode.WEIGHT})} className={`flex-1 py-2 rounded-lg text-xs font-black ${templateForm.mode === PricingMode.WEIGHT ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>按斤</button>

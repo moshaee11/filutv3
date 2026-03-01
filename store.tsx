@@ -55,8 +55,8 @@ const initialData: AppData = {
   payees: ['豆建国', '王妮', '关灵恩', '楠楠嫂'],
   expenses: [],
   templates: [
-    { id: 't1', name: '砂糖橘-大框', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 2.5, defaultPrice: 3.5, lowStockThreshold: 20 },
-    { id: 't2', name: '砂糖橘-精品', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 1.5, defaultPrice: 4.2, lowStockThreshold: 10 },
+    { id: 't1', name: '砂糖橘-大框', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 2.5, defaultPrice: 3.5, lowStockThreshold: 20, unitWeight: 40 },
+    { id: 't2', name: '砂糖橘-精品', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 1.5, defaultPrice: 4.2, lowStockThreshold: 10, unitWeight: 20 },
   ],
   pendingOrders: []
 };
