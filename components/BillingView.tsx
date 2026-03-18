@@ -10,12 +10,16 @@ interface BillingViewProps {
   onBackToHome?: () => void;
 }
 
+let sessionOrderDate = '';
+let sessionOrderTime = '';
+let sessionIsManualDateTime = false;
+
 const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const { data, addOrder, addCustomer } = useApp();
   const [search, setSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [cart, setCart] = useState<OrderItem[]>([]);
-  const [activeField, setActiveField] = useState<'qty' | 'gross' | 'tare' | 'price' | 'received' | 'discount' | 'extraFee'>('qty');
+  const [activeField, setActiveField] = useState<'qty' | 'gross' | 'tare' | 'price' | 'received' | 'discount' | 'extraFee' | 'subtotal'>('qty');
   
   // Batch Filter State
   const [selectedBatchId, setSelectedBatchId] = useState<string>('ALL');
@@ -23,8 +27,8 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const [formValues, setFormValues] = useState({
     qty: '',
     gross: '',
-    tare: '0',
-    price: ''
+    price: '',
+    subtotal: ''
   });
 
   const [checkoutStep, setCheckoutStep] = useState<'select' | 'cart' | 'settle' | 'success'>('select');
@@ -37,8 +41,9 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
 
   // New Features State
-  const [orderDate, setOrderDate] = useState(''); // YYYY-MM-DD
-  const [orderTime, setOrderTime] = useState(''); // HH:mm
+  const [orderDate, setOrderDate] = useState(sessionOrderDate); // YYYY-MM-DD
+  const [orderTime, setOrderTime] = useState(sessionOrderTime); // HH:mm
+  const [isManualDateTime, setIsManualDateTime] = useState(sessionIsManualDateTime); // New: Track manual date/time
   const [isRounding, setIsRounding] = useState(false); // 抹零开关
   const [orderNote, setOrderNote] = useState(''); // New: Order Note
   
@@ -47,12 +52,37 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
 
   // Initialize date/time on mount
   useEffect(() => {
-    setQuickDate(0);
-    const today = new Date();
-    const hh = String(today.getHours()).padStart(2, '0');
-    const min = String(today.getMinutes()).padStart(2, '0');
-    setOrderTime(`${hh}:${min}`);
+    if (!sessionOrderDate || !sessionOrderTime) {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const newDate = `${yyyy}-${mm}-${dd}`;
+      
+      const hh = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      const newTime = `${hh}:${min}`;
+      
+      setOrderDate(newDate);
+      setOrderTime(newTime);
+      sessionOrderDate = newDate;
+      sessionOrderTime = newTime;
+    }
   }, []);
+
+  const updateOrderDate = (val: string, manual: boolean) => {
+    setOrderDate(val);
+    sessionOrderDate = val;
+    setIsManualDateTime(manual);
+    sessionIsManualDateTime = manual;
+  };
+
+  const updateOrderTime = (val: string, manual: boolean) => {
+    setOrderTime(val);
+    sessionOrderTime = val;
+    setIsManualDateTime(manual);
+    sessionIsManualDateTime = manual;
+  };
 
   // Toast Auto-dismiss
   useEffect(() => {
@@ -68,7 +98,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
-    setOrderDate(`${yyyy}-${mm}-${dd}`);
+    updateOrderDate(`${yyyy}-${mm}-${dd}`, daysAgo !== 0);
   };
 
   const [paymentInfo, setPaymentInfo] = useState({
@@ -83,7 +113,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     setCart([]);
     setSelectedProduct(null);
     setSearch('');
-    setFormValues({ qty: '', gross: '', tare: '0', price: '' });
+    setFormValues({ qty: '', gross: '', price: '', subtotal: '' });
     setPaymentInfo({
       received: '',
       method: PaymentMethod.WECHAT,
@@ -99,12 +129,14 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     setIsRounding(false);
     setOrderNote('');
     
-    // Reset date/time to now
-    setQuickDate(0);
-    const today = new Date();
-    const hh = String(today.getHours()).padStart(2, '0');
-    const min = String(today.getMinutes()).padStart(2, '0');
-    setOrderTime(`${hh}:${min}`);
+    // Reset date/time to now ONLY if not manually set
+    if (!isManualDateTime) {
+      setQuickDate(0);
+      const today = new Date();
+      const hh = String(today.getHours()).padStart(2, '0');
+      const min = String(today.getMinutes()).padStart(2, '0');
+      updateOrderTime(`${hh}:${min}`, false);
+    }
   };
 
   const activeBatches = useMemo(() => {
@@ -157,8 +189,8 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     setFormValues({
       qty: '',
       gross: '',
-      tare: (p.defaultTare || 0).toString(),
-      price: (p.sellingPrice || '').toString()
+      price: (p.sellingPrice || '').toString(),
+      subtotal: ''
     });
     setActiveField('qty');
   };
@@ -187,11 +219,13 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     if (!selectedProduct) return;
     const qty = parseFloat(formValues.qty) || 0;
     const price = parseFloat(formValues.price) || 0;
+    const manualSubtotal = parseFloat(formValues.subtotal);
+    const hasManualSubtotal = !isNaN(manualSubtotal) && formValues.subtotal.trim() !== '';
     
-    if (qty <= 0) { alert('请输入有效的件数'); return; }
+    if (!hasManualSubtotal && qty <= 0) { alert('请输入有效的件数或总金额'); return; }
 
     // === 库存预警逻辑 (非阻塞) ===
-    if (qty > selectedProduct.stockQty) {
+    if (qty > 0 && qty > selectedProduct.stockQty) {
         setToast({
             msg: `⚠️ 注意：库存不足 (余${selectedProduct.stockQty})，将产生负库存`,
             type: 'warning'
@@ -199,25 +233,31 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     }
 
     let net = 0;
-    let subtotal = 0;
+    let calculatedSubtotal = 0;
+    const tare = selectedProduct.defaultTare || 0;
+    const gross = parseFloat(formValues.gross) || 0;
+
     if (selectedProduct.pricingMode === PricingMode.WEIGHT) {
-      const gross = parseFloat(formValues.gross) || 0;
-      const tare = parseFloat(formValues.tare) || 0;
-      net = preciseCalc(() => gross - (qty * tare));
-      subtotal = preciseCalc(() => net * price);
+      net = Math.max(0, preciseCalc(() => gross - (qty * tare)));
+      calculatedSubtotal = preciseCalc(() => net * price);
     } else {
-      subtotal = preciseCalc(() => qty * price);
+      calculatedSubtotal = preciseCalc(() => qty * price);
     }
+
+    // Request 1: 计算金额的时候不要小数点后面的，只要整数
+    const finalSubtotal = hasManualSubtotal ? Math.floor(manualSubtotal) : Math.floor(calculatedSubtotal);
+
+    if (finalSubtotal <= 0 && !hasManualSubtotal) { alert('总金额不能为0，请检查输入'); return; }
 
     const item: OrderItem = {
       productId: selectedProduct.id,
       productName: `${selectedProduct.name} (${getBatchPlate(selectedProduct.batchId)})`,
       qty,
-      grossWeight: parseFloat(formValues.gross) || 0,
-      tareWeight: parseFloat(formValues.tare) || 0,
+      grossWeight: gross,
+      tareWeight: tare,
       netWeight: net,
       unitPrice: price,
-      subtotal
+      subtotal: finalSubtotal
     };
 
     setCart(prev => [...prev, item]);
@@ -333,7 +373,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
                     <input 
                         type="date" 
                         value={orderDate}
-                        onChange={(e) => setOrderDate(e.target.value)}
+                        onChange={(e) => updateOrderDate(e.target.value, true)}
                         className="bg-transparent text-sm font-bold text-white outline-none w-28 opacity-0 absolute inset-0 z-10"
                     />
                     <span className="text-sm font-bold text-white">{orderDate}</span>
@@ -345,7 +385,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
                  <input 
                     type="time" 
                     value={orderTime}
-                    onChange={(e) => setOrderTime(e.target.value)}
+                    onChange={(e) => updateOrderTime(e.target.value, true)}
                     className="bg-transparent text-sm font-bold text-white outline-none w-16 text-center"
                 />
               </div>
@@ -608,7 +648,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
                 <input 
                     type="date" 
                     value={orderDate}
-                    onChange={(e) => setOrderDate(e.target.value)}
+                    onChange={(e) => updateOrderDate(e.target.value, true)}
                     className="absolute inset-0 opacity-0 z-10 w-full h-full"
                 />
              </div>
@@ -680,17 +720,15 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
                 <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">件数</p><p className="text-3xl font-black text-gray-800">{formValues.qty || '0'}</p>
               </div>
               {selectedProduct.pricingMode === PricingMode.WEIGHT && (
-                <>
-                  <div onClick={() => setActiveField('gross')} className={`p-4 rounded-3xl border-2 transition-all ${activeField === 'gross' ? 'border-emerald-500 bg-emerald-50 ring-4 ring-emerald-50' : 'bg-gray-50 border-transparent'}`}>
-                    <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">总毛重 (斤)</p><p className="text-3xl font-black text-gray-800">{formValues.gross || '0'}</p>
-                  </div>
-                  <div onClick={() => setActiveField('tare')} className={`p-4 rounded-3xl border-2 transition-all ${activeField === 'tare' ? 'border-emerald-500 bg-emerald-50 ring-4 ring-emerald-50' : 'bg-gray-50 border-transparent'}`}>
-                    <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">皮重 (斤)</p><p className="text-3xl font-black text-gray-800">{formValues.tare || '0'}</p>
-                  </div>
-                </>
+                <div onClick={() => setActiveField('gross')} className={`p-4 rounded-3xl border-2 transition-all ${activeField === 'gross' ? 'border-emerald-500 bg-emerald-50 ring-4 ring-emerald-50' : 'bg-gray-50 border-transparent'}`}>
+                  <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">总毛重 (斤)</p><p className="text-3xl font-black text-gray-800">{formValues.gross || '0'}</p>
+                </div>
               )}
               <div onClick={() => setActiveField('price')} className={`p-4 rounded-3xl border-2 transition-all ${activeField === 'price' ? 'border-emerald-500 bg-emerald-50 ring-4 ring-emerald-50' : 'bg-gray-50 border-transparent'}`}>
                 <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">单价 (元)</p><p className="text-3xl font-black text-gray-800">{formValues.price || '0'}</p>
+              </div>
+              <div onClick={() => setActiveField('subtotal')} className={`p-4 rounded-3xl border-2 transition-all ${selectedProduct.pricingMode !== PricingMode.WEIGHT ? 'col-span-2' : ''} ${activeField === 'subtotal' ? 'border-emerald-500 bg-emerald-50 ring-4 ring-emerald-50' : 'bg-gray-50 border-transparent'}`}>
+                <p className="text-[10px] text-gray-400 mb-1 font-black uppercase">总金额 (元)</p><p className="text-3xl font-black text-gray-800">{formValues.subtotal || '0'}</p>
               </div>
             </div>
 
