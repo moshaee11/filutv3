@@ -19,7 +19,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const [search, setSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [cart, setCart] = useState<OrderItem[]>([]);
-  const [activeField, setActiveField] = useState<'qty' | 'gross' | 'tare' | 'price' | 'received' | 'discount' | 'extraFee' | 'subtotal'>('qty');
+  const [activeField, setActiveField] = useState<string>('qty');
   
   // Batch Filter State
   const [selectedBatchId, setSelectedBatchId] = useState<string>('ALL');
@@ -104,6 +104,11 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const [paymentInfo, setPaymentInfo] = useState({
     received: '',
     method: PaymentMethod.WECHAT,
+    mixedPayments: {
+      [PaymentMethod.WECHAT]: '',
+      [PaymentMethod.ALIPAY]: '',
+      [PaymentMethod.CASH]: ''
+    } as Record<PaymentMethod, string>,
     discount: '0',
     extraFee: '0',
     payee: data.payees[0] || ''
@@ -117,6 +122,11 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     setPaymentInfo({
       received: '',
       method: PaymentMethod.WECHAT,
+      mixedPayments: {
+        [PaymentMethod.WECHAT]: '',
+        [PaymentMethod.ALIPAY]: '',
+        [PaymentMethod.CASH]: ''
+      } as Record<PaymentMethod, string>,
       discount: '0',
       extraFee: '0',
       payee: data.payees[0] || ''
@@ -171,7 +181,16 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const baseTotalAmount = preciseCalc(() => totalSubtotal + (parseFloat(paymentInfo.extraFee) || 0));
   const manualDiscount = parseFloat(paymentInfo.discount) || 0;
   const estimatedReceivable = preciseCalc(() => baseTotalAmount - manualDiscount);
-  const receivedVal = paymentInfo.received === '' ? estimatedReceivable : parseFloat(paymentInfo.received);
+  
+  let receivedVal = 0;
+  if (paymentInfo.method === PaymentMethod.MIXED) {
+    receivedVal = Math.floor((parseFloat(paymentInfo.mixedPayments[PaymentMethod.WECHAT]) || 0) +
+                  (parseFloat(paymentInfo.mixedPayments[PaymentMethod.ALIPAY]) || 0) +
+                  (parseFloat(paymentInfo.mixedPayments[PaymentMethod.CASH]) || 0));
+  } else {
+    receivedVal = paymentInfo.received === '' ? Math.floor(estimatedReceivable) : Math.floor(parseFloat(paymentInfo.received));
+  }
+
   const finalReceivable = isRounding ? receivedVal : estimatedReceivable;
   const finalTotalDiscount = isRounding 
     ? preciseCalc(() => baseTotalAmount - receivedVal) 
@@ -197,10 +216,24 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
 
   const handleKeypadInput = (val: string) => {
     if (checkoutStep === 'settle') {
-      setPaymentInfo(prev => ({ 
-        ...prev, 
-        [activeField]: (prev[activeField as keyof typeof paymentInfo] === '0' && val !== '.') ? val : prev[activeField as keyof typeof paymentInfo] + val 
-      }));
+      if (activeField.startsWith('mixed_')) {
+        const method = activeField.split('_')[1] as PaymentMethod;
+        setPaymentInfo(prev => {
+          const current = prev.mixedPayments[method];
+          return {
+            ...prev,
+            mixedPayments: {
+              ...prev.mixedPayments,
+              [method]: (current === '0' && val !== '.') ? val : current + val
+            }
+          };
+        });
+      } else {
+        setPaymentInfo(prev => ({ 
+          ...prev, 
+          [activeField]: (prev[activeField as keyof typeof paymentInfo] === '0' && val !== '.') ? val : prev[activeField as keyof typeof paymentInfo] + val 
+        }));
+      }
     } else {
       setFormValues(prev => ({ ...prev, [activeField]: prev[activeField as keyof typeof formValues] + val }));
     }
@@ -208,8 +241,22 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
 
   const handleKeypadDelete = () => {
     if (checkoutStep === 'settle') {
-      const current = String(paymentInfo[activeField as keyof typeof paymentInfo]);
-      setPaymentInfo(prev => ({ ...prev, [activeField]: current.length <= 1 ? '0' : current.slice(0, -1) }));
+      if (activeField.startsWith('mixed_')) {
+        const method = activeField.split('_')[1] as PaymentMethod;
+        setPaymentInfo(prev => {
+          const current = prev.mixedPayments[method];
+          return {
+            ...prev,
+            mixedPayments: {
+              ...prev.mixedPayments,
+              [method]: current.length <= 1 ? '0' : current.slice(0, -1)
+            }
+          };
+        });
+      } else {
+        const current = String(paymentInfo[activeField as keyof typeof paymentInfo]);
+        setPaymentInfo(prev => ({ ...prev, [activeField]: current.length <= 1 ? '0' : current.slice(0, -1) }));
+      }
     } else {
       setFormValues(prev => ({ ...prev, [activeField]: prev[activeField as keyof typeof formValues].slice(0, -1) }));
     }
@@ -290,12 +337,18 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     if (method === PaymentMethod.OTHER) {
       setPaymentInfo(prev => ({ ...prev, method, received: '0' }));
       setIsRounding(false);
+      setActiveField('received');
+    } else if (method === PaymentMethod.MIXED) {
+      setPaymentInfo(prev => ({ ...prev, method, received: '0' }));
+      setIsRounding(false);
+      setActiveField('mixed_WECHAT');
     } else {
       setPaymentInfo(prev => ({ 
         ...prev, 
         method, 
         received: estimatedReceivable.toString() 
       }));
+      setActiveField('received');
     }
   };
 
@@ -322,6 +375,11 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
       discount: finalTotalDiscount,
       extraFee: parseFloat(paymentInfo.extraFee) || 0,
       paymentMethod: paymentInfo.method,
+      mixedPayments: paymentInfo.method === PaymentMethod.MIXED ? [
+        { method: PaymentMethod.WECHAT, amount: Math.floor(parseFloat(paymentInfo.mixedPayments[PaymentMethod.WECHAT]) || 0) },
+        { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(paymentInfo.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
+        { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(paymentInfo.mixedPayments[PaymentMethod.CASH]) || 0) }
+      ].filter(m => m.amount > 0) : undefined,
       payee: paymentInfo.payee,
       createdAt: validDate.toISOString(),
       status: OrderStatus.ACTIVE,
@@ -475,31 +533,60 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
              </div>
           </div>
 
-          <div 
-            onClick={() => setActiveField('received')} 
-            className={`p-6 rounded-[2rem] border-2 transition-all cursor-pointer relative overflow-hidden ${activeField === 'received' ? 'bg-emerald-50 border-emerald-500 ring-4 ring-emerald-50' : 'bg-white border-transparent'}`}
-          >
-             <p className="text-xs text-emerald-600 font-black uppercase mb-2 tracking-widest text-center">本次实收</p>
-             <div className="flex items-baseline justify-center gap-2">
-               <span className="text-5xl font-black text-emerald-600 tracking-tighter">
-                 {paymentInfo.received === '' ? estimatedReceivable : paymentInfo.received}
-               </span>
-               <div className="bg-emerald-500 w-1.5 h-8 rounded-full animate-pulse"></div>
-             </div>
-             
-             <div className="mt-4 text-center h-4 flex justify-center items-center">
-               {!isRounding && finalDebt > 0 && (
-                 <p className="text-[10px] font-black text-red-500 animate-in fade-in flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg">
-                   <FileText size={10} /> 剩余 {finalDebt} 元将计入欠款
-                 </p>
-               )}
-               {isRounding && finalTotalDiscount > 0 && (
-                 <p className="text-[10px] font-black text-blue-500 animate-in fade-in flex items-center gap-1 bg-blue-50 px-2 py-1 rounded-lg">
-                   <Scissors size={10} /> 已抹零/优惠 {finalTotalDiscount} 元
-                 </p>
-               )}
-             </div>
-          </div>
+          {paymentInfo.method === PaymentMethod.MIXED ? (
+            <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100 space-y-3">
+              <p className="text-xs text-emerald-600 font-black uppercase mb-2 tracking-widest text-center">混合支付明细</p>
+              {[
+                { id: PaymentMethod.WECHAT, label: '微信', color: 'text-green-600' },
+                { id: PaymentMethod.ALIPAY, label: '支付宝', color: 'text-blue-600' },
+                { id: PaymentMethod.CASH, label: '现金', color: 'text-orange-600' }
+              ].map(m => (
+                <div 
+                  key={m.id}
+                  onClick={() => setActiveField(`mixed_${m.id}`)}
+                  className={`flex justify-between items-center p-3 rounded-xl border-2 transition-all cursor-pointer ${activeField === `mixed_${m.id}` ? 'bg-emerald-50 border-emerald-500' : 'bg-gray-50 border-transparent'}`}
+                >
+                  <span className={`text-sm font-black ${m.color}`}>{m.label}</span>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xl font-black text-gray-800">
+                      {paymentInfo.mixedPayments[m.id as PaymentMethod] || '0'}
+                    </span>
+                    {activeField === `mixed_${m.id}` && <div className="bg-emerald-500 w-1 h-5 rounded-full animate-pulse"></div>}
+                  </div>
+                </div>
+              ))}
+              <div className="pt-2 border-t border-gray-100 flex justify-between items-center">
+                <span className="text-xs text-gray-400 font-black">混合总计</span>
+                <span className="text-lg font-black text-emerald-600">¥{receivedVal}</span>
+              </div>
+            </div>
+          ) : (
+            <div 
+              onClick={() => setActiveField('received')} 
+              className={`p-6 rounded-[2rem] border-2 transition-all cursor-pointer relative overflow-hidden ${activeField === 'received' ? 'bg-emerald-50 border-emerald-500 ring-4 ring-emerald-50' : 'bg-white border-transparent'}`}
+            >
+               <p className="text-xs text-emerald-600 font-black uppercase mb-2 tracking-widest text-center">本次实收</p>
+               <div className="flex items-baseline justify-center gap-2">
+                 <span className="text-5xl font-black text-emerald-600 tracking-tighter">
+                   {paymentInfo.received === '' ? estimatedReceivable : paymentInfo.received}
+                 </span>
+                 {activeField === 'received' && <div className="bg-emerald-500 w-1.5 h-8 rounded-full animate-pulse"></div>}
+               </div>
+               
+               <div className="mt-4 text-center h-4 flex justify-center items-center">
+                 {!isRounding && finalDebt > 0 && (
+                   <p className="text-[10px] font-black text-red-500 animate-in fade-in flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg">
+                     <FileText size={10} /> 剩余 {finalDebt} 元将计入欠款
+                   </p>
+                 )}
+                 {isRounding && finalTotalDiscount > 0 && (
+                   <p className="text-[10px] font-black text-blue-500 animate-in fade-in flex items-center gap-1 bg-blue-50 px-2 py-1 rounded-lg">
+                     <Scissors size={10} /> 已抹零/优惠 {finalTotalDiscount} 元
+                   </p>
+                 )}
+               </div>
+            </div>
+          )}
 
           {/* New: Order Note Field */}
           <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100 space-y-2">
@@ -517,17 +604,18 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
         </main>
 
         <div className="bg-[#2D3142] p-4 pb-12 safe-bottom z-50 rounded-t-[2rem] shadow-[0_-5px_20px_rgba(0,0,0,0.2)]">
-           <div className="grid grid-cols-4 gap-3 mb-4">
+           <div className="grid grid-cols-5 gap-2 mb-4">
               {[
                 { id: PaymentMethod.WECHAT, label: '微信', icon: '💬', color: 'bg-green-500' },
                 { id: PaymentMethod.ALIPAY, label: '支付宝', icon: '💳', color: 'bg-blue-500' },
                 { id: PaymentMethod.CASH, label: '现金', icon: '💰', color: 'bg-orange-500' },
+                { id: PaymentMethod.MIXED, label: '混合', icon: '🔀', color: 'bg-purple-500' },
                 { id: PaymentMethod.OTHER, label: '挂账', icon: '⭕', color: 'bg-red-500' },
               ].map(m => (
                 <button 
                   key={m.id} 
                   onClick={() => handlePaymentMethodChange(m.id)} 
-                  className={`flex flex-col items-center py-3 rounded-2xl border transition-all active:scale-95 ${paymentInfo.method === m.id ? `${m.color} text-white border-transparent shadow-lg shadow-black/20 ring-2 ring-white/20 translate-y-[-2px]` : 'bg-white/5 text-gray-400 border-white/5'}`}
+                  className={`flex flex-col items-center py-2 rounded-2xl border transition-all active:scale-95 ${paymentInfo.method === m.id ? `${m.color} text-white border-transparent shadow-lg shadow-black/20 ring-2 ring-white/20 translate-y-[-2px]` : 'bg-white/5 text-gray-400 border-white/5'}`}
                 >
                   <span className="text-xl mb-0.5">{m.icon}</span>
                   <span className="text-[10px] font-black">{m.label}</span>

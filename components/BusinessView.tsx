@@ -86,12 +86,22 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     // --- A. INCOME (Orders) ---
     data.orders.filter(o => o.status === OrderStatus.ACTIVE).forEach(order => {
       if (filterPayee !== 'ALL' && order.payee !== filterPayee) return;
-      if (filterMethod !== 'ALL' && order.paymentMethod !== filterMethod) return;
+      
+      const isMixedMatch = order.paymentMethod === PaymentMethod.MIXED && order.mixedPayments?.some(m => m.method === filterMethod);
+      if (filterMethod !== 'ALL' && order.paymentMethod !== filterMethod && !isMixedMatch) return;
 
       const dateStr = formatDate(order.createdAt);
       
       const payMap: Record<string, string> = { 'WECHAT': '微信', 'ALIPAY': '支付宝', 'CASH': '现金', 'OTHER': '挂账' };
       const payLabel = payMap[order.paymentMethod] || '其他';
+
+      // Calculate ratio for mixed payments if filtering by channel
+      let channelRatio = 1;
+      if (filterMethod !== 'ALL' && order.paymentMethod === PaymentMethod.MIXED) {
+          const channelAmount = order.mixedPayments?.find(m => m.method === filterMethod)?.amount || 0;
+          const totalReceived = order.receivedAmount || 1;
+          channelRatio = channelAmount / totalReceived;
+      }
 
       order.items.forEach(item => {
         const product = data.products.find(p => p.id === item.productId);
@@ -107,8 +117,8 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           paymentMethod: payLabel,
           payee: order.payee || '未记录',
           customerName: order.customerName,
-          qty: item.qty,
-          amount: item.subtotal,
+          qty: item.qty * channelRatio,
+          amount: item.subtotal * channelRatio,
           type: 'INCOME'
         });
       });
@@ -455,7 +465,7 @@ const BusinessView: React.FC = () => {
       }
 
       const matchPayee = filterPayee === 'ALL' || o.payee === filterPayee;
-      const matchMethod = filterMethod === 'ALL' || o.paymentMethod === filterMethod;
+      const matchMethod = filterMethod === 'ALL' || o.paymentMethod === filterMethod || (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments?.some(m => m.method === filterMethod));
 
       return inTime && isActive && matchBatch && matchPayee && matchMethod;
     });
@@ -481,7 +491,7 @@ const BusinessView: React.FC = () => {
         const matchBatch = filterBatchId === 'ALL'; // Repayments don't link to batch well, hide if specific batch selected
         
         const matchPayee = filterPayee === 'ALL' || r.payee === filterPayee;
-        const matchMethod = filterMethod === 'ALL' || r.paymentMethod === filterMethod;
+        const matchMethod = filterMethod === 'ALL' || r.paymentMethod === filterMethod || (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments?.some(m => m.method === filterMethod));
 
         return inTime && matchBatch && matchPayee && matchMethod;
     });
@@ -495,33 +505,56 @@ const BusinessView: React.FC = () => {
     
     // Revenue Calculation (成交额)
     let revenue = 0;
-    if (filterBatchId === 'ALL') {
-        revenue = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
-    } else {
-        const batchProductIds = data.products.filter(p => p.batchId === filterBatchId).map(p => p.id);
-        orders.forEach(o => {
-            const orderSubtotal = o.items.reduce((s, i) => s + i.subtotal, 0);
-            let batchSubtotalInOrder = 0;
-            o.items.forEach(i => {
-                if (batchProductIds.includes(i.productId)) {
-                    batchSubtotalInOrder += i.subtotal;
+    if (filterMethod === 'ALL') {
+        if (filterBatchId === 'ALL') {
+            revenue = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
+        } else {
+            const batchProductIds = data.products.filter(p => p.batchId === filterBatchId).map(p => p.id);
+            orders.forEach(o => {
+                const orderSubtotal = o.items.reduce((s, i) => s + i.subtotal, 0);
+                let batchSubtotalInOrder = 0;
+                o.items.forEach(i => {
+                    if (batchProductIds.includes(i.productId)) {
+                        batchSubtotalInOrder += i.subtotal;
+                    }
+                });
+                if (orderSubtotal > 0) {
+                   const ratio = batchSubtotalInOrder / orderSubtotal;
+                   const allocatedDiscount = o.discount * ratio;
+                   revenue += (batchSubtotalInOrder - allocatedDiscount);
                 }
             });
-            if (orderSubtotal > 0) {
-               const ratio = batchSubtotalInOrder / orderSubtotal;
-               const allocatedDiscount = o.discount * ratio;
-               revenue += (batchSubtotalInOrder - allocatedDiscount);
+        }
+    } else {
+        // For a specific channel, "Revenue" is effectively what was received in that channel
+        revenue = orders.reduce((sum, o) => {
+            if (o.paymentMethod === filterMethod) return sum + (o.totalAmount - o.discount);
+            if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
+                return sum + (o.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
             }
-        });
+            return sum;
+        }, 0);
     }
 
-    const totalExpense = expenses.reduce((sum, e) => sum + e.amount, 0);
-    const totalRepaid = repayments.reduce((sum, r) => sum + r.amount, 0);
+    const totalExpense = (filterMethod === 'ALL' || filterMethod === PaymentMethod.CASH) 
+        ? expenses.reduce((sum, e) => sum + e.amount, 0) 
+        : 0;
 
     // Summing up cash flow by channel (Order Received + Repayment Received)
     const sumChannel = (method: PaymentMethod) => {
-        const fromOrders = orders.filter(o => o.paymentMethod === method).reduce((sum, o) => sum + o.receivedAmount, 0);
-        const fromRepayments = repayments.filter(r => r.paymentMethod === method).reduce((sum, r) => sum + r.amount, 0);
+        if (filterMethod !== 'ALL' && filterMethod !== method) return 0;
+        const fromOrders = orders.reduce((sum, o) => {
+            if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
+                return sum + (o.mixedPayments.find(m => m.method === method)?.amount || 0);
+            }
+            return sum + (o.paymentMethod === method ? o.receivedAmount : 0);
+        }, 0);
+        const fromRepayments = repayments.reduce((sum, r) => {
+            if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
+                return sum + (r.mixedPayments.find(m => m.method === method)?.amount || 0);
+            }
+            return sum + (r.paymentMethod === method ? r.amount : 0);
+        }, 0);
         return fromOrders + fromRepayments;
     };
 
@@ -530,10 +563,29 @@ const BusinessView: React.FC = () => {
     const cash = sumChannel(PaymentMethod.CASH);
     
     // 欠款增加 (只看新单欠款)
-    const debtIncrease = orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0);
+    const debtIncrease = (filterMethod === 'ALL' || filterMethod === PaymentMethod.OTHER)
+        ? orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0)
+        : 0;
     
     // 实际总入账 = 订单实收 + 还款
-    const totalOrderReceived = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
+    const totalOrderReceived = orders.reduce((sum, o) => {
+        if (filterMethod === 'ALL') return sum + o.receivedAmount;
+        if (o.paymentMethod === filterMethod) return sum + o.receivedAmount;
+        if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
+            return sum + (o.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
+        }
+        return sum;
+    }, 0);
+
+    const totalRepaid = repayments.reduce((sum, r) => {
+        if (filterMethod === 'ALL') return sum + r.amount;
+        if (r.paymentMethod === filterMethod) return sum + r.amount;
+        if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
+            return sum + (r.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
+        }
+        return sum;
+    }, 0);
+
     const totalReceived = totalOrderReceived + totalRepaid;
     
     // 结余
@@ -723,18 +775,24 @@ const BusinessView: React.FC = () => {
             <h3 className="font-black text-sm">收款账户明细 (含回款)</h3>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className={`bg-[#F0FDF4] p-4 rounded-2xl text-center border border-emerald-50 transition-opacity ${stats.wechat === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
-              <p className="text-[10px] text-emerald-600 font-black mb-1">💬 微信</p>
-              <p className="text-lg font-black text-emerald-900">¥{stats.wechat.toLocaleString()}</p>
-            </div>
-            <div className={`bg-[#EFF6FF] p-4 rounded-2xl text-center border border-blue-50 transition-opacity ${stats.alipay === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
-              <p className="text-[10px] text-blue-600 font-black mb-1">💳 支付宝</p>
-              <p className="text-lg font-black text-blue-900">¥{stats.alipay.toLocaleString()}</p>
-            </div>
-            <div className={`bg-[#FFFBEB] p-4 rounded-2xl text-center border border-amber-50 transition-opacity ${stats.cash === 0 && filterMethod !== 'ALL' ? 'opacity-30' : 'opacity-100'}`}>
-              <p className="text-[10px] text-amber-600 font-black mb-1">💰 现金</p>
-              <p className="text-lg font-black text-amber-900">¥{stats.cash.toLocaleString()}</p>
-            </div>
+            {(filterMethod === 'ALL' || filterMethod === PaymentMethod.WECHAT) && (
+              <div className="bg-[#F0FDF4] p-4 rounded-2xl text-center border border-emerald-50">
+                <p className="text-[10px] text-emerald-600 font-black mb-1">💬 微信</p>
+                <p className="text-lg font-black text-emerald-900">¥{stats.wechat.toLocaleString()}</p>
+              </div>
+            )}
+            {(filterMethod === 'ALL' || filterMethod === PaymentMethod.ALIPAY) && (
+              <div className="bg-[#EFF6FF] p-4 rounded-2xl text-center border border-blue-50">
+                <p className="text-[10px] text-blue-600 font-black mb-1">💳 支付宝</p>
+                <p className="text-lg font-black text-blue-900">¥{stats.alipay.toLocaleString()}</p>
+              </div>
+            )}
+            {(filterMethod === 'ALL' || filterMethod === PaymentMethod.CASH) && (
+              <div className="bg-[#FFFBEB] p-4 rounded-2xl text-center border border-amber-50">
+                <p className="text-[10px] text-amber-600 font-black mb-1">💰 现金</p>
+                <p className="text-lg font-black text-amber-900">¥{stats.cash.toLocaleString()}</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -854,7 +912,13 @@ const BusinessView: React.FC = () => {
                          <div key={o.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50">
                              <div className="flex justify-between items-center mb-1">
                                 <span className="font-black text-gray-800">{o.customerName}</span>
-                                <span className="text-emerald-600 font-black">¥{preciseCalc(() => o.totalAmount - o.discount)}</span>
+                                <span className="text-emerald-600 font-black">
+                                    ¥{filterMethod === 'ALL' 
+                                        ? (o.totalAmount - o.discount).toLocaleString() 
+                                        : (o.paymentMethod === filterMethod 
+                                            ? (o.totalAmount - o.discount).toLocaleString() 
+                                            : (o.mixedPayments?.find(m => m.method === filterMethod)?.amount || 0).toLocaleString())}
+                                </span>
                              </div>
                              <div className="text-xs text-gray-400 mb-2">
                                 {o.items.map(i => `${i.productName}x${i.qty}`).join(', ')}

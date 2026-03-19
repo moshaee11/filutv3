@@ -8,7 +8,8 @@ export enum PaymentMethod {
   WECHAT = 'WECHAT',
   ALIPAY = 'ALIPAY',
   CASH = 'CASH',
-  OTHER = 'OTHER'
+  OTHER = 'OTHER',
+  MIXED = 'MIXED'
 }
 
 export enum OrderStatus {
@@ -84,6 +85,7 @@ export interface Order {
   discount: number;
   extraFee: number; 
   paymentMethod: PaymentMethod;
+  mixedPayments?: { method: PaymentMethod, amount: number }[];
   payee: string;
   createdAt: string;
   status: OrderStatus;
@@ -98,6 +100,7 @@ export interface Repayment {
   date: string;
   payee: string; // 收款人
   paymentMethod?: PaymentMethod; // 新增：收款方式
+  mixedPayments?: { method: PaymentMethod, amount: number }[];
   note?: string;
 }
 

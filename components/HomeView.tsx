@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { OrderStatus, PaymentMethod, Customer } from '../types';
 
-const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) => {
+const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => void }> = ({ onStartBilling, onGoToReconcile }) => {
   const { data, importData } = useApp();
   const [activeModal, setActiveModal] = useState<'repayment' | 'expense' | null>(null);
   
@@ -155,7 +155,12 @@ const HomeView: React.FC<{ onStartBilling: () => void }> = ({ onStartBilling }) 
         </div>
         <div className="flex justify-between items-end">
           <div className="space-y-0.5"><p className="text-5xl font-black tracking-tighter">{totalDebtAmount.toLocaleString()}</p><p className="text-[10px] text-white/70 font-black uppercase tracking-widest">全店累计待收 (元)</p></div>
-          <button className="bg-white text-emerald-600 px-6 py-2.5 rounded-full font-black text-xs flex items-center gap-2 shadow-xl border-none"><Send size={14} /> 对账单</button>
+          <button 
+            onClick={onGoToReconcile}
+            className="bg-white text-emerald-600 px-6 py-2.5 rounded-full font-black text-xs flex items-center gap-2 shadow-xl border-none active:scale-95 transition-transform"
+          >
+            <Send size={14} /> 对账单
+          </button>
         </div>
       </div>
 
@@ -291,6 +296,11 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   const [repayForm, setRepayForm] = useState({
       amount: '',
       method: PaymentMethod.WECHAT,
+      mixedPayments: {
+        [PaymentMethod.WECHAT]: '',
+        [PaymentMethod.ALIPAY]: '',
+        [PaymentMethod.CASH]: ''
+      } as Record<PaymentMethod, string>,
       payee: data.payees[0] || '',
       note: ''
   });
@@ -325,6 +335,11 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       setRepayForm({
           amount: customer.totalDebt.toString(),
           method: PaymentMethod.WECHAT,
+          mixedPayments: {
+            [PaymentMethod.WECHAT]: '',
+            [PaymentMethod.ALIPAY]: '',
+            [PaymentMethod.CASH]: ''
+          } as Record<PaymentMethod, string>,
           payee: data.payees[0] || '',
           note: ''
       });
@@ -332,7 +347,16 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
 
   const handleSubmitRepayment = () => {
       if (!repayingCustomer) return;
-      const amount = parseFloat(repayForm.amount);
+      
+      let amount = 0;
+      if (repayForm.method === PaymentMethod.MIXED) {
+          amount = Math.floor((parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) +
+                   (parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) +
+                   (parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0));
+      } else {
+          amount = Math.floor(parseFloat(repayForm.amount));
+      }
+
       if (isNaN(amount) || amount <= 0) return alert('请输入有效还款金额');
       if (!repayForm.payee) return alert('请选择收款人');
 
@@ -344,6 +368,11 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
           date: new Date().toISOString(), 
           payee: repayForm.payee,
           paymentMethod: repayForm.method,
+          mixedPayments: repayForm.method === PaymentMethod.MIXED ? [
+            { method: PaymentMethod.WECHAT, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) },
+            { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
+            { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0) }
+          ].filter(m => m.amount > 0) : undefined,
           note: repayForm.note 
       });
       
@@ -396,23 +425,13 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
 
                  <div className="space-y-4">
                     <div className="space-y-2">
-                        <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">本次收款金额</label>
-                        <input 
-                            type="number"
-                            autoFocus
-                            value={repayForm.amount}
-                            onChange={e => setRepayForm({...repayForm, amount: e.target.value})}
-                            className="w-full bg-emerald-50 p-5 rounded-2xl text-3xl font-black text-emerald-600 outline-none border-2 border-transparent focus:border-emerald-500 transition-all text-center"
-                        />
-                    </div>
-
-                    <div className="space-y-2">
                         <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">收款方式</label>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-4 gap-2">
                              {[
                                 { id: PaymentMethod.WECHAT, label: '微信', icon: '💬', color: 'bg-green-100 text-green-600 border-green-200' },
                                 { id: PaymentMethod.ALIPAY, label: '支付宝', icon: '💳', color: 'bg-blue-100 text-blue-600 border-blue-200' },
                                 { id: PaymentMethod.CASH, label: '现金', icon: '💰', color: 'bg-orange-100 text-orange-600 border-orange-200' },
+                                { id: PaymentMethod.MIXED, label: '混合', icon: '🔀', color: 'bg-purple-100 text-purple-600 border-purple-200' },
                              ].map(m => (
                                  <button
                                     key={m.id}
@@ -425,6 +444,45 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                              ))}
                         </div>
                     </div>
+
+                    {repayForm.method === PaymentMethod.MIXED ? (
+                        <div className="space-y-2 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">混合支付明细</label>
+                            {[
+                                { id: PaymentMethod.WECHAT, label: '微信', color: 'text-green-600' },
+                                { id: PaymentMethod.ALIPAY, label: '支付宝', color: 'text-blue-600' },
+                                { id: PaymentMethod.CASH, label: '现金', color: 'text-orange-600' }
+                            ].map(m => (
+                                <div key={m.id} className="flex items-center justify-between bg-white p-2 rounded-xl border border-gray-100">
+                                    <span className={`text-sm font-black w-16 ${m.color}`}>{m.label}</span>
+                                    <input
+                                        type="number"
+                                        placeholder="0"
+                                        value={repayForm.mixedPayments[m.id as PaymentMethod]}
+                                        onChange={e => setRepayForm({
+                                            ...repayForm,
+                                            mixedPayments: {
+                                                ...repayForm.mixedPayments,
+                                                [m.id]: e.target.value
+                                            }
+                                        })}
+                                        className="w-full bg-transparent text-right text-lg font-black text-gray-800 outline-none"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">本次收款金额</label>
+                            <input 
+                                type="number"
+                                autoFocus
+                                value={repayForm.amount}
+                                onChange={e => setRepayForm({...repayForm, amount: e.target.value})}
+                                className="w-full bg-emerald-50 p-5 rounded-2xl text-3xl font-black text-emerald-600 outline-none border-2 border-transparent focus:border-emerald-500 transition-all text-center"
+                            />
+                        </div>
+                    )}
 
                     <div className="space-y-2">
                         <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">收款人 (经手人)</label>

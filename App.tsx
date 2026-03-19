@@ -10,6 +10,7 @@ import { Home, ClipboardList, Package, User, PlusCircle } from 'lucide-react';
 
 const App: React.FC = () => {
   const [activeView, setActiveView] = useState<'home' | 'billing' | 'business' | 'manage' | 'me'>('home');
+  const [manageSubView, setManageSubView] = useState<string>('main');
   const [needsBackup, setNeedsBackup] = useState(false);
 
   useEffect(() => {
@@ -25,12 +26,17 @@ const App: React.FC = () => {
   const renderView = () => {
     switch (activeView) {
       case 'billing': return <BillingView onBackToHome={() => setActiveView('home')} />;
-      case 'business': return <BusinessView />;
-      case 'manage': return <ManageView />;
+      case 'business': return <BusinessView onGoToReconcile={() => { setManageSubView('reconcile'); setActiveView('manage'); }} />;
+      case 'manage': return <ManageView initialSubView={manageSubView} onSubViewChange={setManageSubView} />;
       case 'me': return <MeView />;
       case 'home':
       default:
-        return <HomeView onStartBilling={() => setActiveView('billing')} />;
+        return (
+          <HomeView 
+            onStartBilling={() => setActiveView('billing')} 
+            onGoToReconcile={() => { setManageSubView('reconcile'); setActiveView('manage'); }}
+          />
+        );
     }
   };
 

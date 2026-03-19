@@ -26,11 +26,13 @@ const SubViewShell: React.FC<{
   searchProps?: { value: string; onChange: (s: string) => void; placeholder: string };
   batchSelectorProps?: BatchSelectorProps; 
   disableScroll?: boolean;
-}> = ({ title, onBack, children, searchProps, batchSelectorProps, disableScroll = false }) => (
+  headerRight?: React.ReactNode;
+}> = ({ title, onBack, children, searchProps, batchSelectorProps, disableScroll = false, headerRight }) => (
   <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
     <header className="bg-white px-4 py-4 border-b flex items-center shrink-0 shadow-sm z-10">
       <button onClick={onBack} className="p-2 -ml-2 active:scale-90"><ArrowLeft /></button>
       <h1 className="text-lg font-black flex-1 text-center pr-8">{title}</h1>
+      {headerRight && <div className="absolute right-4">{headerRight}</div>}
     </header>
     
     <div className="bg-white border-b shadow-sm z-10">
@@ -276,6 +278,14 @@ const ManageView: React.FC = () => {
   const [editingPayee, setEditingPayee] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
+  // Batch Edit Orders State
+  const [isBatchEditMode, setIsBatchEditMode] = useState(false);
+  const [selectedHistoryItems, setSelectedHistoryItems] = useState<string[]>([]);
+  const [showBatchEditModal, setShowBatchEditModal] = useState(false);
+  const [batchEditDate, setBatchEditDate] = useState('');
+  const [batchEditTime, setBatchEditTime] = useState('');
+  const [batchEditPayee, setBatchEditPayee] = useState('');
+
   // Forms
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
   const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '', unitWeight: '' });
@@ -303,7 +313,7 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, updateOrder, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -949,9 +959,35 @@ const ManageView: React.FC = () => {
     return (
       <SubViewShell 
         title="单据查询" 
-        onBack={() => setSubView('main')} 
+        onBack={() => {
+            if (isBatchEditMode) {
+                setIsBatchEditMode(false);
+                setSelectedHistoryItems([]);
+            } else {
+                setSubView('main');
+            }
+        }} 
         searchProps={{ value: orderSearch, onChange: setOrderSearch, placeholder: '搜索单号或客户...' }}
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
+        headerRight={
+            <button 
+                onClick={() => {
+                    if (isBatchEditMode) {
+                        if (selectedHistoryItems.length > 0) {
+                            setShowBatchEditModal(true);
+                        } else {
+                            setIsBatchEditMode(false);
+                        }
+                    } else {
+                        setIsBatchEditMode(true);
+                        setSelectedHistoryItems([]);
+                    }
+                }}
+                className={`text-sm font-bold ${isBatchEditMode ? (selectedHistoryItems.length > 0 ? 'text-emerald-600' : 'text-gray-500') : 'text-emerald-600'}`}
+            >
+                {isBatchEditMode ? (selectedHistoryItems.length > 0 ? `修改(${selectedHistoryItems.length})` : '取消') : '批量修改'}
+            </button>
+        }
       >
         {combinedHistory.length > 0 ? combinedHistory.map((item: any) => {
              // ... Repayment Logic ...
@@ -961,22 +997,38 @@ const ManageView: React.FC = () => {
                  const methodLabel = rep.paymentMethod ? payMethodMap[rep.paymentMethod] : '现金';
 
                  return (
-                    <div key={rep.id} className="bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden">
-                       <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
-                       <div className="pl-3">
-                           <div className="flex items-center gap-2 mb-1">
-                               <span className="font-black text-gray-800">{rep.customerName}</span>
-                               <span className="bg-emerald-100 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded font-black">还款</span>
-                           </div>
-                           <p className="text-xs text-gray-600 font-bold mb-1">
-                             {rep.payee ? `${rep.payee}收 - ${methodLabel}` : '未记录经手人'}
-                           </p>
-                           <p className="text-[10px] text-gray-400 font-mono">{new Date(rep.date).toLocaleString()}</p>
-                           {rep.note && <p className="text-[10px] text-gray-300 mt-0.5">备注: {rep.note}</p>}
-                       </div>
-                       <div className="text-right">
-                           <p className="font-black text-lg text-emerald-500">+¥{rep.amount}</p>
-                           <p className="text-[10px] text-gray-400 font-bold">已入账</p>
+                    <div key={rep.id} className="flex items-center gap-2">
+                       {isBatchEditMode && (
+                           <input 
+                               type="checkbox" 
+                               checked={selectedHistoryItems.includes(rep.id)}
+                               onChange={(e) => {
+                                   if (e.target.checked) {
+                                       setSelectedHistoryItems(prev => [...prev, rep.id]);
+                                   } else {
+                                       setSelectedHistoryItems(prev => prev.filter(id => id !== rep.id));
+                                   }
+                               }}
+                               className="w-5 h-5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
+                           />
+                       )}
+                       <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
+                          <div className="pl-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                  <span className="font-black text-gray-800">{rep.customerName}</span>
+                                  <span className="bg-emerald-100 text-emerald-600 text-[10px] px-1.5 py-0.5 rounded font-black">还款</span>
+                              </div>
+                              <p className="text-xs text-gray-600 font-bold mb-1">
+                                {rep.payee ? `${rep.payee}收 - ${methodLabel}` : '未记录经手人'}
+                              </p>
+                              <p className="text-[10px] text-gray-400 font-mono">{new Date(rep.date).toLocaleString()}</p>
+                              {rep.note && <p className="text-[10px] text-gray-300 mt-0.5">备注: {rep.note}</p>}
+                          </div>
+                          <div className="text-right">
+                              <p className="font-black text-lg text-emerald-500">+¥{rep.amount}</p>
+                              <p className="text-[10px] text-gray-400 font-bold">已入账</p>
+                          </div>
                        </div>
                     </div>
                  );
@@ -988,38 +1040,53 @@ const ManageView: React.FC = () => {
              const summary = order.items.map(i => `${i.productName} x${i.qty}`).join(', ');
 
              return (
-                <div 
-                  key={order.id}
-                  onClick={() => { setSelectedOrderId(order.id); setSubView('order_detail'); }} 
-                  className={`bg-white rounded-2xl p-4 shadow-sm border ${isCancelled ? 'border-red-100 bg-red-50/30 opacity-70' : 'border-gray-50'} active:scale-[0.98] transition-all flex justify-between items-center`}
-                >
-                  <div className="flex-1 min-w-0 pr-3">
-                     <div className="flex items-center gap-2 mb-1">
-                        <span className={`font-black text-sm ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
-                        {isCancelled ? (
-                             <span className="bg-red-100 text-red-500 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">已作废</span>
-                        ) : (
-                             <span className="bg-blue-50 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">开单</span>
-                        )}
+                <div key={order.id} className="flex items-center gap-2">
+                   {isBatchEditMode && (
+                       <input 
+                           type="checkbox" 
+                           checked={selectedHistoryItems.includes(order.id)}
+                           onChange={(e) => {
+                               if (e.target.checked) {
+                                   setSelectedHistoryItems(prev => [...prev, order.id]);
+                               } else {
+                                   setSelectedHistoryItems(prev => prev.filter(id => id !== order.id));
+                               }
+                           }}
+                           className="w-5 h-5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
+                       />
+                   )}
+                   <div 
+                     onClick={() => { if (!isBatchEditMode) { setSelectedOrderId(order.id); setSubView('order_detail'); } }} 
+                     className={`flex-1 bg-white rounded-2xl p-4 shadow-sm border ${isCancelled ? 'border-red-100 bg-red-50/30 opacity-70' : 'border-gray-50'} ${!isBatchEditMode ? 'active:scale-[0.98]' : ''} transition-all flex justify-between items-center`}
+                   >
+                     <div className="flex-1 min-w-0 pr-3">
+                        <div className="flex items-center gap-2 mb-1">
+                           <span className={`font-black text-sm ${isCancelled ? 'text-red-400 line-through' : 'text-gray-800'}`}>{order.customerName}</span>
+                           {isCancelled ? (
+                                <span className="bg-red-100 text-red-500 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">已作废</span>
+                           ) : (
+                                <span className="bg-blue-50 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-black whitespace-nowrap">开单</span>
+                           )}
+                        </div>
+                        
+                        <p className="text-xs text-gray-600 font-bold mb-1.5 truncate">
+                           {summary || '无商品明细'}
+                        </p>
+                        
+                        <div className="flex items-center gap-2 text-[10px] text-gray-400 font-bold">
+                           <span>{order.payee ? `${order.payee}开单` : '无经手人'}</span>
+                           <span className="w-0.5 h-2 bg-gray-300"></span>
+                           <span className="font-mono">{new Date(order.createdAt).toLocaleString()}</span>
+                        </div>
                      </div>
                      
-                     <p className="text-xs text-gray-600 font-bold mb-1.5 truncate">
-                        {summary || '无商品明细'}
-                     </p>
-                     
-                     <div className="flex items-center gap-2 text-[10px] text-gray-400 font-bold">
-                        <span>{order.payee ? `${order.payee}开单` : '无经手人'}</span>
-                        <span className="w-0.5 h-2 bg-gray-300"></span>
-                        <span className="font-mono">{new Date(order.createdAt).toLocaleString()}</span>
+                     <div className="text-right shrink-0">
+                        <p className="font-black text-lg text-gray-900">¥{order.totalAmount}</p>
+                        <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0.01 ? 'text-red-400' : 'text-emerald-500'}`}>
+                           {order.totalAmount - order.receivedAmount > 0.01 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
+                        </p>
                      </div>
-                  </div>
-                  
-                  <div className="text-right shrink-0">
-                     <p className="font-black text-lg text-gray-900">¥{order.totalAmount}</p>
-                     <p className={`text-[10px] font-bold ${order.totalAmount - order.receivedAmount > 0.01 ? 'text-red-400' : 'text-emerald-500'}`}>
-                        {order.totalAmount - order.receivedAmount > 0.01 ? `欠 ¥${(order.totalAmount - order.receivedAmount).toFixed(1)}` : '已付清'}
-                     </p>
-                  </div>
+                   </div>
                 </div>
              );
         }) : (
@@ -1290,13 +1357,27 @@ const ManageView: React.FC = () => {
           return isDate && isBatch;
       });
       
-      const income = filteredReconcileOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
+      const filteredReconcileRepayments = data.repayments.filter(r => {
+          if (!r || !r.date) return false;
+          return r.date.startsWith(reconcileDate);
+      });
+      
+      const incomeFromOrders = filteredReconcileOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
+      const incomeFromRepayments = filteredReconcileRepayments.reduce((sum, r) => sum + r.amount, 0);
+      const income = incomeFromOrders + incomeFromRepayments;
+      
       const expense = filteredReconcileExpenses.reduce((sum, e) => sum + e.amount, 0);
       
+      const sumByMethod = (method: string) => {
+          const fromOrders = filteredReconcileOrders.filter(o => o.paymentMethod === method).reduce((s,o)=>s+o.receivedAmount,0);
+          const fromRepayments = filteredReconcileRepayments.filter(r => r.paymentMethod === method).reduce((s,r)=>s+r.amount,0);
+          return fromOrders + fromRepayments;
+      };
+
       const byMethod = {
-          WECHAT: filteredReconcileOrders.filter(o => o.paymentMethod === 'WECHAT').reduce((s,o)=>s+o.receivedAmount,0),
-          ALIPAY: filteredReconcileOrders.filter(o => o.paymentMethod === 'ALIPAY').reduce((s,o)=>s+o.receivedAmount,0),
-          CASH: filteredReconcileOrders.filter(o => o.paymentMethod === 'CASH').reduce((s,o)=>s+o.receivedAmount,0),
+          WECHAT: sumByMethod('WECHAT'),
+          ALIPAY: sumByMethod('ALIPAY'),
+          CASH: sumByMethod('CASH'),
           OTHER: 0,
       };
 
@@ -1472,6 +1553,117 @@ const ManageView: React.FC = () => {
       );
   }
 
+  if (showBatchEditModal) {
+      return (
+          <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl w-full max-w-sm p-6 shadow-xl animate-in zoom-in-95">
+                  <h2 className="text-xl font-black text-gray-800 mb-6">批量修改订单 ({selectedHistoryItems.length}个)</h2>
+                  
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-bold text-gray-500 mb-1">修改日期 (留空不修改)</label>
+                          <input 
+                              type="date" 
+                              value={batchEditDate}
+                              onChange={e => setBatchEditDate(e.target.value)}
+                              className="w-full h-12 bg-gray-50 rounded-xl px-4 font-bold text-gray-800 border-none focus:ring-2 ring-emerald-100 outline-none"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-gray-500 mb-1">修改时间 (留空不修改)</label>
+                          <input 
+                              type="time" 
+                              value={batchEditTime}
+                              onChange={e => setBatchEditTime(e.target.value)}
+                              className="w-full h-12 bg-gray-50 rounded-xl px-4 font-bold text-gray-800 border-none focus:ring-2 ring-emerald-100 outline-none"
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-gray-500 mb-1">修改开单人 (留空不修改)</label>
+                          <select 
+                              value={batchEditPayee} 
+                              onChange={e => setBatchEditPayee(e.target.value)}
+                              className="w-full h-12 bg-gray-50 rounded-xl px-4 font-bold text-gray-800 border-none focus:ring-2 ring-emerald-100 outline-none appearance-none"
+                          >
+                              <option value="">-- 不修改 --</option>
+                              {data.payees.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                      </div>
+                  </div>
+
+                  <div className="flex gap-3 mt-8">
+                      <button 
+                          onClick={() => setShowBatchEditModal(false)}
+                          className="flex-1 py-3.5 bg-gray-100 text-gray-500 rounded-xl font-black text-sm active:scale-95 transition-all"
+                      >
+                          取消
+                      </button>
+                      <button 
+                          onClick={() => {
+                              selectedHistoryItems.forEach(id => {
+                                  const order = data.orders.find(o => o.id === id);
+                                  const repayment = data.repayments.find(r => r.id === id);
+                                  
+                                  if (order) {
+                                      const updates: any = {};
+                                      if (batchEditDate || batchEditTime) {
+                                          const currentCreatedAt = new Date(order.createdAt);
+                                          let newDate = currentCreatedAt;
+                                          if (batchEditDate) {
+                                              const [y, m, d] = batchEditDate.split('-');
+                                              newDate.setFullYear(parseInt(y), parseInt(m) - 1, parseInt(d));
+                                          }
+                                          if (batchEditTime) {
+                                              const [h, min] = batchEditTime.split(':');
+                                              newDate.setHours(parseInt(h), parseInt(min), 0, 0);
+                                          }
+                                          updates.createdAt = newDate.toISOString();
+                                      }
+                                      if (batchEditPayee) {
+                                          updates.payee = batchEditPayee;
+                                      }
+                                      if (Object.keys(updates).length > 0) {
+                                          updateOrder(id, updates);
+                                      }
+                                  } else if (repayment) {
+                                      const updates: any = {};
+                                      if (batchEditDate || batchEditTime) {
+                                          const currentCreatedAt = new Date(repayment.date);
+                                          let newDate = currentCreatedAt;
+                                          if (batchEditDate) {
+                                              const [y, m, d] = batchEditDate.split('-');
+                                              newDate.setFullYear(parseInt(y), parseInt(m) - 1, parseInt(d));
+                                          }
+                                          if (batchEditTime) {
+                                              const [h, min] = batchEditTime.split(':');
+                                              newDate.setHours(parseInt(h), parseInt(min), 0, 0);
+                                          }
+                                          updates.date = newDate.toISOString();
+                                      }
+                                      if (batchEditPayee) {
+                                          updates.payee = batchEditPayee;
+                                      }
+                                      if (Object.keys(updates).length > 0) {
+                                          updateRepayment(id, updates);
+                                      }
+                                  }
+                              });
+                              setShowBatchEditModal(false);
+                              setIsBatchEditMode(false);
+                              setSelectedHistoryItems([]);
+                              setBatchEditDate('');
+                              setBatchEditTime('');
+                              setBatchEditPayee('');
+                          }}
+                          className="flex-1 py-3.5 bg-emerald-500 text-white rounded-xl font-black text-sm shadow-lg shadow-emerald-200 active:scale-95 transition-all"
+                      >
+                          确认修改
+                      </button>
+                  </div>
+              </div>
+          </div>
+      );
+  }
 
   return null;
 };

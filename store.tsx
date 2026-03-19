@@ -16,7 +16,9 @@ interface AppContextType {
   addOrder: (o: Order) => void;
   cancelOrder: (id: string) => void;
   deleteOrder: (id: string) => void;
+  updateOrder: (id: string, updates: Partial<Order>) => void;
   addRepayment: (r: Repayment) => void;
+  updateRepayment: (id: string, updates: Partial<Repayment>) => void;
   addExpense: (e: Expense) => void;
   addBatch: (b: Batch) => void;
   updateBatch: (b: Batch) => void;
@@ -410,6 +412,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const updateOrder = (id: string, updates: Partial<Order>) => {
+    setData(prev => ({
+      ...prev,
+      orders: prev.orders.map(o => o.id === id ? { ...o, ...updates } : o)
+    }));
+  };
+
   const addRepayment = (r: Repayment) => {
     setData(prev => {
       const newCustomers = prev.customers.map(c => 
@@ -423,6 +432,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         repayments: [r, ...prev.repayments]
       };
     });
+  };
+
+  const updateRepayment = (id: string, updates: Partial<Repayment>) => {
+    setData(prev => ({
+      ...prev,
+      repayments: prev.repayments.map(r => r.id === id ? { ...r, ...updates } : r)
+    }));
   };
 
   const addExpense = (e: Expense) => setData(prev => {
@@ -467,8 +483,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addProduct, updateProduct, deleteProduct, adjustStock,
       addBatch, updateBatch, closeBatch, deleteBatch,
       addExtraFee, removeExtraFee,
-      addOrder, cancelOrder, deleteOrder,
-      addRepayment, addExpense,
+      addOrder, cancelOrder, deleteOrder, updateOrder,
+      addRepayment, updateRepayment, addExpense,
       addPayee, updatePayee, deletePayee,
       addCustomer, 
       importData, exportData,
