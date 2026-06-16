@@ -290,7 +290,7 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   const [form, setForm] = useState({ amount: '', type: '' });
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
-  
+
   // Repayment Form State
   const [repayingCustomer, setRepayingCustomer] = useState<Customer | null>(null);
   const [repayForm, setRepayForm] = useState({
@@ -304,6 +304,33 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       payee: data.payees[0] || '',
       note: ''
   });
+
+  // 新增：查看欠款明细的客户
+  const [viewingDebtCustomer, setViewingDebtCustomer] = useState<Customer | null>(null);
+
+  // 计算某客户的所有欠款订单
+  const getDebtOrders = (customerId: string) => {
+      return data.orders
+          .filter(o => o.customerId === customerId && o.status === OrderStatus.ACTIVE)
+          .map(o => {
+              const debt = preciseCalc(() =>
+                  Math.max(0, o.totalAmount - o.discount - o.receivedAmount)
+              );
+              if (debt <= 0) return null;
+              return {
+                  id: o.id,
+                  orderNo: o.orderNo,
+                  createdAt: o.createdAt,
+                  totalAmount: o.totalAmount,
+                  receivedAmount: o.receivedAmount,
+                  discount: o.discount,
+                  debt,
+                  items: o.items.map((i: any) => `${i.productName}x${i.qty}`).join(', ')
+              };
+          })
+          .filter((x): x is { id: string; orderNo: string; createdAt: string; totalAmount: number; receivedAmount: number; discount: number; debt: number; items: string } => x !== null)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  };
 
   const [expenseScope, setExpenseScope] = useState<'DAILY' | 'BATCH'>('DAILY');
   const [selectedBatchId, setSelectedBatchId] = useState<string>('');
@@ -539,18 +566,23 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
 
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3 no-scrollbar pb-32">
            {customerList.map(c => (
-             <div key={c.id} className="bg-white p-5 rounded-[1.2rem] flex justify-between items-center shadow-sm border border-gray-50 active:scale-[0.99] transition-all">
-                <div className="space-y-1.5">
+             <div key={c.id}
+                  onClick={() => c.totalDebt > 0 && setViewingDebtCustomer(c)}
+                  className={`bg-white p-5 rounded-[1.2rem] flex justify-between items-center shadow-sm border border-gray-50 transition-all ${c.totalDebt > 0 ? 'active:scale-[0.99] cursor-pointer' : 'opacity-90'}`}>
+                <div className="space-y-1.5 flex-1">
                    <p className="text-xl font-black text-[#111827]">{c.name}</p>
                    <p className="text-xs text-[#9ca3af] font-bold">最近交易: {c.lastDate}</p>
+                   {c.totalDebt > 0 && (
+                     <p className="text-[10px] text-[#3b82f6] font-bold mt-1">点击查看具体欠款订单 →</p>
+                   )}
                 </div>
-                <div className="flex items-center gap-6">
+                <div className="flex items-center gap-4">
                    <div className="text-center">
                         <p className="text-xs text-[#9ca3af] font-bold mb-0.5">欠款</p>
                         <p className={`text-2xl font-black ${c.totalDebt > 0 ? 'text-[#ef4444]' : 'text-[#d1d5db]'}`}>¥{c.totalDebt.toLocaleString()}</p>
                    </div>
-                   <button 
-                        onClick={() => handleOpenRepay(c)}
+                   <button
+                        onClick={(e) => { e.stopPropagation(); c.totalDebt > 0 && handleOpenRepay(c); }}
                         className={`w-11 h-11 rounded-xl flex items-center justify-center border-2 transition-all active:scale-90 ${c.totalDebt > 0 ? 'bg-[#ebf5ff] border-[#bfdbfe] text-[#3b82f6] shadow-sm' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
                    >
                         <Wallet size={20} strokeWidth={2.5} />
@@ -562,6 +594,67 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                 <div className="text-center py-20 text-gray-400 font-bold">暂无相关客户</div>
            )}
         </div>
+
+        {/* 新增：某客户欠款订单明细弹窗 */}
+        {viewingDebtCustomer && (
+          <div className="fixed inset-0 z-[350] bg-[#F1F3F6] flex flex-col animate-in slide-in-from-right">
+            <header className="bg-white px-4 py-4 flex items-center shrink-0 border-b border-gray-100 shadow-sm z-10">
+              <button onClick={() => setViewingDebtCustomer(null)} className="text-[#3b82f6] text-base font-bold active:scale-95 transition-all">返回</button>
+              <div className="flex-1 text-center pr-8">
+                <h1 className="font-black text-lg text-[#1f2937]">{viewingDebtCustomer.name} 的欠款</h1>
+                <p className="text-xs text-[#ef4444] font-bold mt-0.5">总欠款: ¥{viewingDebtCustomer.totalDebt.toLocaleString()}</p>
+              </div>
+            </header>
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 no-scrollbar pb-32">
+              {(() => {
+                const debtOrders = getDebtOrders(viewingDebtCustomer.id);
+                if (debtOrders.length === 0) {
+                  return <div className="text-center py-20 text-gray-400 font-bold">该客户没有欠款订单</div>;
+                }
+                return debtOrders.map(order => {
+                  const date = new Date(order.createdAt);
+                  const dateStr = `${date.getFullYear()}/${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getDate().toString().padStart(2,'0')} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+                  return (
+                    <div key={order.id} className="bg-white p-4 rounded-[1.2rem] shadow-sm border border-gray-50 space-y-3">
+                      <div className="flex justify-between items-start">
+                        <div className="space-y-1 flex-1">
+                          <p className="text-sm font-black text-gray-800">{order.orderNo}</p>
+                          <p className="text-xs text-gray-400 font-bold">{dateStr}</p>
+                          {order.items && <p className="text-xs text-gray-500 mt-1">{order.items}</p>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100">
+                        <div>
+                          <p className="text-[10px] text-gray-400 font-bold">订单金额</p>
+                          <p className="text-sm font-black text-gray-800">¥{order.totalAmount.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-400 font-bold">已收</p>
+                          <p className="text-sm font-black text-emerald-600">¥{order.receivedAmount.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-gray-400 font-bold">欠款</p>
+                          <p className="text-sm font-black text-red-500">¥{order.debt.toLocaleString()}</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setViewingDebtCustomer(null);
+                          // 直接进入该客户的收款面板
+                          handleOpenRepay(viewingDebtCustomer);
+                        }}
+                        className="w-full bg-[#3b82f6] text-white py-3 rounded-xl font-black text-sm shadow-md active:scale-95 transition-all"
+                      >
+                        对该客户进行收款
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        )}
 
         {showAddCustomer && (
             <div className="fixed inset-0 z-[300] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in">

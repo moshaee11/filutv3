@@ -1,9 +1,9 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
-import { preciseCalc, downloadCSV } from '../utils';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
+import { preciseCalc, downloadCSV, breakdownOrderByMethod, breakdownRepaymentByMethod } from '../utils';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
 import { PaymentMethod, OrderStatus, Order, Expense } from '../types';
 import { 
@@ -540,54 +540,34 @@ const BusinessView: React.FC = () => {
         ? expenses.reduce((sum, e) => sum + e.amount, 0) 
         : 0;
 
-    // Summing up cash flow by channel (Order Received + Repayment Received)
-    const sumChannel = (method: PaymentMethod) => {
+    // ===== 统一渠道拆分统计（确保各页面数字一致）=====
+    // 对 orders 按 paymentMethod 与 mixedPayments 拆成 { method, amount }[]
+    // 对 repayments 也做同样处理
+    const orderBreakdown = orders.flatMap(o => breakdownOrderByMethod(o));
+    const repaymentBreakdown = repayments.flatMap(r => breakdownRepaymentByMethod(r));
+
+    // 辅助：给定 method，从所有 breakdown 中求和
+    const sumByMethod = (method: PaymentMethod): number => {
         if (filterMethod !== 'ALL' && filterMethod !== method) return 0;
-        const fromOrders = orders.reduce((sum, o) => {
-            if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
-                return sum + (o.mixedPayments.find(m => m.method === method)?.amount || 0);
-            }
-            return sum + (o.paymentMethod === method ? o.receivedAmount : 0);
-        }, 0);
-        const fromRepayments = repayments.reduce((sum, r) => {
-            if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
-                return sum + (r.mixedPayments.find(m => m.method === method)?.amount || 0);
-            }
-            return sum + (r.paymentMethod === method ? r.amount : 0);
-        }, 0);
+        const fromOrders = orderBreakdown.filter(b => b.method === method).reduce((s, b) => s + b.amount, 0);
+        const fromRepayments = repaymentBreakdown.filter(b => b.method === method).reduce((s, b) => s + b.amount, 0);
         return fromOrders + fromRepayments;
     };
 
-    const wechat = sumChannel(PaymentMethod.WECHAT);
-    const alipay = sumChannel(PaymentMethod.ALIPAY);
-    const cash = sumChannel(PaymentMethod.CASH);
-    
-    // 欠款增加 (只看新单欠款)
+    const wechat = sumByMethod(PaymentMethod.WECHAT);
+    const alipay = sumByMethod(PaymentMethod.ALIPAY);
+    const cash = sumByMethod(PaymentMethod.CASH);
+
+    // 欠款增加（只看新订单的应收-实收）
     const debtIncrease = (filterMethod === 'ALL' || filterMethod === PaymentMethod.OTHER)
-        ? orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0)
+        ? orders.reduce((sum, o) => sum + Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount), 0)
         : 0;
-    
-    // 实际总入账 = 订单实收 + 还款
-    const totalOrderReceived = orders.reduce((sum, o) => {
-        if (filterMethod === 'ALL') return sum + o.receivedAmount;
-        if (o.paymentMethod === filterMethod) return sum + o.receivedAmount;
-        if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
-            return sum + (o.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
-        }
-        return sum;
-    }, 0);
 
-    const totalRepaid = repayments.reduce((sum, r) => {
-        if (filterMethod === 'ALL') return sum + r.amount;
-        if (r.paymentMethod === filterMethod) return sum + r.amount;
-        if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
-            return sum + (r.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
-        }
-        return sum;
-    }, 0);
-
+    // 实际总入账 = 所有渠道的 breakdown 求和
+    const totalOrderReceived = orderBreakdown.reduce((s, b) => s + b.amount, 0);
+    const totalRepaid = repaymentBreakdown.reduce((s, b) => s + b.amount, 0);
     const totalReceived = totalOrderReceived + totalRepaid;
-    
+
     // 结余
     const balance = totalReceived - totalExpense;
 

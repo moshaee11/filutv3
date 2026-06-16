@@ -1,15 +1,15 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../store';
-import { 
-  Package, ArrowLeft, Truck, ChevronRight, X, Trash2, 
-  Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet, 
-  Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus, 
+import {
+  Package, ArrowLeft, Truck, ChevronRight, X, Trash2,
+  Edit2, Scale, BoxSelect, TrendingUp, Search, Wallet,
+  Users, ArrowDownCircle, Share2, BarChart3, ClipboardCheck, Minus,
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
   Plus, PlusCircle, CheckCircle2, UserCog, FileText, Check
 } from 'lucide-react';
-import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
-import { preciseCalc, downloadJSON } from '../utils';
+import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate, PaymentMethod } from '../types';
+import { preciseCalc, downloadJSON, breakdownOrderByMethod, breakdownRepaymentByMethod } from '../utils';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -313,7 +313,7 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, updateOrder, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, cancelOrder, updateOrder, addRepayment, deleteRepayment, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -1356,28 +1356,32 @@ const ManageView: React.FC = () => {
           }
           return isDate && isBatch;
       });
-      
+
       const filteredReconcileRepayments = data.repayments.filter(r => {
           if (!r || !r.date) return false;
           return r.date.startsWith(reconcileDate);
       });
-      
-      const incomeFromOrders = filteredReconcileOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
-      const incomeFromRepayments = filteredReconcileRepayments.reduce((sum, r) => sum + r.amount, 0);
+
+      // 统一用 breakdownByMethod 计算各渠道金额（与 BusinessView 一致）
+      const orderBreakdown = filteredReconcileOrders.flatMap(o => breakdownOrderByMethod(o));
+      const repaymentBreakdown = filteredReconcileRepayments.flatMap(r => breakdownRepaymentByMethod(r));
+
+      const incomeFromOrders = orderBreakdown.reduce((s, b) => s + b.amount, 0);
+      const incomeFromRepayments = repaymentBreakdown.reduce((s, b) => s + b.amount, 0);
       const income = incomeFromOrders + incomeFromRepayments;
-      
+
       const expense = filteredReconcileExpenses.reduce((sum, e) => sum + e.amount, 0);
-      
-      const sumByMethod = (method: string) => {
-          const fromOrders = filteredReconcileOrders.filter(o => o.paymentMethod === method).reduce((s,o)=>s+o.receivedAmount,0);
-          const fromRepayments = filteredReconcileRepayments.filter(r => r.paymentMethod === method).reduce((s,r)=>s+r.amount,0);
+
+      const sumByMethod = (method: PaymentMethod) => {
+          const fromOrders = orderBreakdown.filter(b => b.method === method).reduce((s, b) => s + b.amount, 0);
+          const fromRepayments = repaymentBreakdown.filter(b => b.method === method).reduce((s, b) => s + b.amount, 0);
           return fromOrders + fromRepayments;
       };
 
       const byMethod = {
-          WECHAT: sumByMethod('WECHAT'),
-          ALIPAY: sumByMethod('ALIPAY'),
-          CASH: sumByMethod('CASH'),
+          WECHAT: sumByMethod(PaymentMethod.WECHAT),
+          ALIPAY: sumByMethod(PaymentMethod.ALIPAY),
+          CASH: sumByMethod(PaymentMethod.CASH),
           OTHER: 0,
       };
 

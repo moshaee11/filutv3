@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate, PendingOrder } from './types';
-import { preciseCalc, downloadJSON } from './utils';
+import { preciseCalc, downloadJSON, getLastPriceForProduct } from './utils';
 
 interface AppContextType {
   data: AppData;
@@ -19,6 +19,7 @@ interface AppContextType {
   updateOrder: (id: string, updates: Partial<Order>) => void;
   addRepayment: (r: Repayment) => void;
   updateRepayment: (id: string, updates: Partial<Repayment>) => void;
+  deleteRepayment: (id: string) => void; // 新增：删除还款记录
   addExpense: (e: Expense) => void;
   addBatch: (b: Batch) => void;
   updateBatch: (b: Batch) => void;
@@ -38,7 +39,7 @@ interface AppContextType {
   // Pending Orders & History
   addPendingOrder: (p: PendingOrder) => void;
   removePendingOrder: (id: string) => void;
-  getLastPrice: (customerId: string, productId: string) => number | null;
+  getLastPrice: (customerId: string, productId: string, productName?: string) => number | null;
   archiveOldData: (months: number) => void;
 }
 
@@ -105,11 +106,17 @@ const sanitizeData = (incoming: any): AppData => {
       totalAmount: Number(o.totalAmount) || 0,
       receivedAmount: Number(o.receivedAmount) || 0,
       discount: Number(o.discount) || 0,
+      // 补充 v3 新增字段默认值，undefined = 从未被修改
+      updatedAt: o.updatedAt || undefined,
+      source: o.source || undefined,
   }));
 
   const cleanRepayments = safeArray<Repayment>(incoming.repayments, (r) => !!r.id).map((r: any) => ({
       ...r,
-      paymentMethod: r.paymentMethod || PaymentMethod.CASH 
+      paymentMethod: r.paymentMethod || PaymentMethod.CASH,
+      createdAt: r.createdAt || r.date || undefined, // 老数据没有 createdAt，用 date 兜底
+      updatedAt: r.updatedAt || undefined,
+      source: r.source || undefined,
   }));
 
   let cleanCustomers = safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
@@ -233,26 +240,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addPendingOrder = (p: PendingOrder) => setData(prev => ({ ...prev, pendingOrders: [p, ...prev.pendingOrders] }));
   const removePendingOrder = (id: string) => setData(prev => ({ ...prev, pendingOrders: prev.pendingOrders.filter(p => p.id !== id) }));
 
-  // --- 智能价格记忆 ---
-  const getLastPrice = (customerId: string, productId: string) => {
-      // 散客不记忆
+  // --- 智能价格记忆（用 utils 的缓存实现，避免每次全扫） ---
+  const getLastPrice = (customerId: string, _productId: string, productName?: string) => {
+      if (!productName) return null;
       if (customerId === 'guest') return null;
-      
-      // 在历史订单中查找该客户买过该商品的最近记录
-      const relevantOrders = data.orders.filter(o => 
-          o.customerId === customerId && 
-          o.status === OrderStatus.ACTIVE &&
-          o.items.some(i => i.productId === productId)
-      );
-
-      if (relevantOrders.length === 0) return null;
-
-      // 按时间倒序
-      relevantOrders.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      
-      const lastOrder = relevantOrders[0];
-      const item = lastOrder.items.find(i => i.productId === productId);
-      return item ? item.unitPrice : null;
+      return getLastPriceForProduct(customerId, productName, data.orders);
   };
 
   // --- 数据归档 ---
@@ -295,6 +287,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       alert(`✅ 归档成功！\n已将 ${cutoffDate.toLocaleDateString()} 之前的数据导出并清理。\n请妥善保管下载的文件。`);
   };
 
+  // --- 辅助：从最新 orders+repayments 全量重算 customers.totalDebt ---
+  // （所有写订单/还款的路径统一调用，避免累计漂移）
+  const rebuildCustomersFromState = (orders: Order[], repayments: Repayment[], customers: Customer[]): Customer[] => {
+    return recalculateAllDebts(orders, repayments, customers);
+  };
+
   const addOrder = (o: Order) => {
     setData(prev => {
       const newProducts = prev.products.map(p => {
@@ -309,24 +307,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      const debtAmount = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
-      let newCustomers = prev.customers;
-      
-      const shouldTrackDebt = debtAmount > 0 && o.customerId !== 'guest';
-
-      if (shouldTrackDebt) {
-        newCustomers = prev.customers.map(c => 
-          c.id === o.customerId 
-            ? { ...c, totalDebt: preciseCalc(() => c.totalDebt + debtAmount) } 
-            : c
-        );
-      }
+      const newOrders = [o, ...prev.orders];
+      const newCustomers = rebuildCustomersFromState(newOrders, prev.repayments, prev.customers);
 
       return {
         ...prev,
         products: newProducts,
         customers: newCustomers,
-        orders: [o, ...prev.orders]
+        orders: newOrders
       };
     });
   };
@@ -336,6 +324,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const targetOrder = prev.orders.find(o => o.id === id);
       if (!targetOrder || targetOrder.status === OrderStatus.CANCELLED) return prev;
 
+      // 库存回退（软删除 = 把商品加回来）
       const newProducts = prev.products.map(p => {
         const item = targetOrder.items.find(i => i.productId === p.id);
         if (item) {
@@ -348,97 +337,111 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
-      const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
-      let newCustomers = prev.customers;
-      
-      const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
-      
-      if (shouldRevertDebt) {
-        newCustomers = prev.customers.map(c => 
-          c.id === targetOrder.customerId 
-            ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - debtAmount)) } 
-            : c
-        );
-      }
+      const newOrders = prev.orders.map(o =>
+        o.id === id ? { ...o, status: OrderStatus.CANCELLED, updatedAt: new Date().toISOString() } : o
+      );
+      const newCustomers = rebuildCustomersFromState(newOrders, prev.repayments, prev.customers);
 
       return {
         ...prev,
         products: newProducts,
         customers: newCustomers,
-        orders: prev.orders.map(o => o.id === id ? { ...o, status: OrderStatus.CANCELLED } : o)
+        orders: newOrders
       };
     });
   };
 
   const deleteOrder = (id: string) => {
     setData(prev => {
-        const targetOrder = prev.orders.find(o => o.id === id);
-        if (!targetOrder) return prev;
+      const targetOrder = prev.orders.find(o => o.id === id);
+      if (!targetOrder) return prev;
 
-        let newProducts = prev.products;
-        let newCustomers = prev.customers;
+      // 仅 ACTIVE 订单回退库存（CANCELLED 已经回退过一次，不可重复）
+      let newProducts = prev.products;
+      if (targetOrder.status === OrderStatus.ACTIVE) {
+        newProducts = prev.products.map(p => {
+          const item = targetOrder.items.find(i => i.productId === p.id);
+          if (item) {
+            return {
+              ...p,
+              stockQty: p.stockQty + item.qty,
+              stockWeight: p.stockWeight + item.netWeight
+            };
+          }
+          return p;
+        });
+      }
 
-        if (targetOrder.status === OrderStatus.ACTIVE) {
-            newProducts = prev.products.map(p => {
-                const item = targetOrder.items.find(i => i.productId === p.id);
-                if (item) {
-                    return {
-                        ...p,
-                        stockQty: p.stockQty + item.qty,
-                        stockWeight: p.stockWeight + item.netWeight
-                    };
-                }
-                return p;
-            });
+      const newOrders = prev.orders.filter(o => o.id !== id);
+      const newCustomers = rebuildCustomersFromState(newOrders, prev.repayments, prev.customers);
 
-            const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
-            const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
-
-            if (shouldRevertDebt) {
-                newCustomers = prev.customers.map(c => 
-                    c.id === targetOrder.customerId 
-                        ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - debtAmount)) } 
-                        : c
-                );
-            }
-        }
-
-        return {
-            ...prev,
-            products: newProducts,
-            customers: newCustomers,
-            orders: prev.orders.filter(o => o.id !== id)
-        };
+      return {
+        ...prev,
+        products: newProducts,
+        customers: newCustomers,
+        orders: newOrders
+      };
     });
   };
 
   const updateOrder = (id: string, updates: Partial<Order>) => {
-    setData(prev => ({
-      ...prev,
-      orders: prev.orders.map(o => o.id === id ? { ...o, ...updates } : o)
-    }));
+    setData(prev => {
+      const newOrders = prev.orders.map(o =>
+        o.id === id ? { ...o, ...updates, updatedAt: new Date().toISOString() } : o
+      );
+      const newCustomers = rebuildCustomersFromState(newOrders, prev.repayments, prev.customers);
+      return {
+        ...prev,
+        orders: newOrders,
+        customers: newCustomers
+      };
+    });
   };
 
   const addRepayment = (r: Repayment) => {
     setData(prev => {
-      const newCustomers = prev.customers.map(c => 
-        c.id === r.customerId 
-          ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - r.amount)) } 
-          : c
-      );
+      // 自动补充 createdAt（若无）
+      const normalized: Repayment = {
+        ...r,
+        createdAt: r.createdAt || new Date().toISOString(),
+      };
+      const newRepayments = [normalized, ...prev.repayments];
+      const newCustomers = rebuildCustomersFromState(prev.orders, newRepayments, prev.customers);
       return {
         ...prev,
         customers: newCustomers,
-        repayments: [r, ...prev.repayments]
+        repayments: newRepayments
       };
     });
   };
 
   const updateRepayment = (id: string, updates: Partial<Repayment>) => {
-    setData(prev => ({
-      ...prev,
-      repayments: prev.repayments.map(r => r.id === id ? { ...r, ...updates } : r)
-    }));
+    setData(prev => {
+      const newRepayments = prev.repayments.map(r =>
+        r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r
+      );
+      const newCustomers = rebuildCustomersFromState(prev.orders, newRepayments, prev.customers);
+      return {
+        ...prev,
+        repayments: newRepayments,
+        customers: newCustomers
+      };
+    });
+  };
+
+  // 新增：删除还款记录（物理删除 + 全量重算欠款）
+  const deleteRepayment = (id: string) => {
+    setData(prev => {
+      const target = prev.repayments.find(r => r.id === id);
+      if (!target) return prev;
+      const newRepayments = prev.repayments.filter(r => r.id !== id);
+      const newCustomers = rebuildCustomersFromState(prev.orders, newRepayments, prev.customers);
+      return {
+        ...prev,
+        repayments: newRepayments,
+        customers: newCustomers
+      };
+    });
   };
 
   const addExpense = (e: Expense) => setData(prev => {
@@ -454,15 +457,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ...prev, expenses: [e, ...prev.expenses], batches: updatedBatches };
   });
 
-  const importData = (base64Str: string) => {
+  const importData = (jsonStrOrBase64: string) => {
     try {
-      let jsonStr = '';
+      let jsonStr = jsonStrOrBase64.trim();
+
+      // 1) 首先尝试把输入当成原始 JSON 解析（MeView 传的是纯文本）
+      let parsed: any = null;
       try {
-        jsonStr = decodeURIComponent(escape(atob(base64Str)));
-      } catch (e) {
-        jsonStr = base64Str;
+        parsed = JSON.parse(jsonStr);
+      } catch (_) {
+        // 2) 不是合法 JSON → 尝试 base64 → 解码 → 再 JSON.parse
+        try {
+          const decoded = decodeURIComponent(escape(atob(jsonStr)));
+          parsed = JSON.parse(decoded);
+        } catch (__) {
+          throw new Error('无法解析数据文件');
+        }
       }
-      const parsed = JSON.parse(jsonStr);
+
       const clean = sanitizeData(parsed);
       setData(prev => ({ ...initialData, ...clean }));
       alert('数据导入成功！\n客户欠款已根据历史订单自动校准。');
@@ -484,7 +496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addBatch, updateBatch, closeBatch, deleteBatch,
       addExtraFee, removeExtraFee,
       addOrder, cancelOrder, deleteOrder, updateOrder,
-      addRepayment, updateRepayment, addExpense,
+      addRepayment, updateRepayment, deleteRepayment, addExpense,
       addPayee, updatePayee, deletePayee,
       addCustomer, 
       importData, exportData,

@@ -15,7 +15,7 @@ let sessionOrderTime = '';
 let sessionIsManualDateTime = false;
 
 const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
-  const { data, addOrder, addCustomer } = useApp();
+  const { data, addOrder, addCustomer, getLastPrice } = useApp();
   const [search, setSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -205,10 +205,19 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
 
   const handleProductClick = (p: Product) => {
     setSelectedProduct(p);
+    // 优先用"该客户上次买此商品的价格"作为默认单价；没有则退回商品的 sellingPrice
+    let defaultPrice: number | null = null;
+    if (selectedCustomerId && selectedCustomerId !== 'guest') {
+      defaultPrice = getLastPrice(selectedCustomerId, p.id, p.name);
+    }
+    const priceStr = defaultPrice !== null && defaultPrice > 0
+      ? defaultPrice.toString()
+      : (p.sellingPrice || '').toString();
+
     setFormValues({
       qty: '',
       gross: '',
-      price: (p.sellingPrice || '').toString(),
+      price: priceStr,
       subtotal: ''
     });
     setActiveField('qty');

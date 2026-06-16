@@ -80,14 +80,16 @@ export interface Order {
   customerId: string;
   customerName: string;
   items: OrderItem[];
-  totalAmount: number; 
+  totalAmount: number;
   receivedAmount: number;
   discount: number;
-  extraFee: number; 
+  extraFee: number;
   paymentMethod: PaymentMethod;
   mixedPayments?: { method: PaymentMethod, amount: number }[];
   payee: string;
-  createdAt: string;
+  createdAt: string;          // 实际交易时间，用户可改
+  updatedAt?: string;         // 系统维护：最后修改时间，存在=已编辑
+  source?: 'BILLING' | 'QUICK' | 'MANUAL' | 'IMPORT';  // 数据来源
   status: OrderStatus;
   note?: string;
 }
@@ -97,9 +99,12 @@ export interface Repayment {
   customerId: string;
   customerName: string;
   amount: number;
-  date: string;
-  payee: string; // 收款人
-  paymentMethod?: PaymentMethod; // 新增：收款方式
+  date: string;               // 实际收款时间，用户可改
+  createdAt?: string;         // 系统维护：录入时间，不可改
+  updatedAt?: string;         // 系统维护：最后修改时间
+  source?: 'BILLING' | 'QUICK' | 'MANUAL' | 'IMPORT';
+  payee: string;              // 收款人
+  paymentMethod?: PaymentMethod;
   mixedPayments?: { method: PaymentMethod, amount: number }[];
   note?: string;
 }
