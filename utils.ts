@@ -48,8 +48,8 @@ export const breakdownRepaymentByMethod = (r: Repayment): MethodAmount[] => {
 };
 
 // ========== 实时计算客户欠款（不依赖累计字段） ==========
-// 规则：订单的 receivedAmount 就是"已收了多少"的唯一来源，customer.totalDebt = sum(订单未付金额)
-// 还款记录只是审计痕迹，不再参与计算（避免双重扣减导致债务为 0 或负数）
+// 规则：customer.totalDebt = sum(订单未付金额) - sum(还款金额)
+// 订单 receivedAmount 仅记录下单时的实收，不随欠款回收改变；还款记录才是欠款回收的唯一来源
 export const computeCustomerDebt = (
   customerId: string,
   orders: Order[],
@@ -63,7 +63,11 @@ export const computeCustomerDebt = (
       return sum + Math.max(0, debt);
     }, 0);
 
-  return preciseCalc(() => Math.max(0, orderDebt));
+  const repaymentSum = repayments
+    .filter(r => r.customerId === customerId)
+    .reduce((sum, r) => sum + r.amount, 0);
+
+  return preciseCalc(() => Math.max(0, orderDebt - repaymentSum));
 };
 
 // ========== 计算客户所有欠款订单明细 ==========

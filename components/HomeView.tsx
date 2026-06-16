@@ -393,7 +393,8 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       });
   };
 
-  // 新：勾选具体订单后收款 —— 把还款金额分摊到每笔订单的 receivedAmount
+  // 新：勾选具体订单后收款 —— 只创建还款记录（不修改订单 receivedAmount，避免双重扣减）
+  // 债务 = sum(订单未付金额) - sum(还款金额)
   const handleSubmitDebtOrderRepayment = (orderIds: string[]) => {
       if (!viewingDebtCustomer) return;
       if (!repayingCustomer) return;
@@ -419,23 +420,7 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       const actual = Math.min(amount, totalDebtOfSelected);
       if (actual <= 0) return alert('金额无效');
 
-      // 按比例分摊到每笔订单的 receivedAmount
-      let remaining = actual;
-      debtOrders.forEach((d, idx) => {
-          let allocated: number;
-          if (idx === debtOrders.length - 1) {
-              allocated = remaining;
-          } else {
-              allocated = preciseCalc(() => actual * d.debt / totalDebtOfSelected);
-          }
-          remaining = preciseCalc(() => remaining - allocated);
-          const order = data.orders.find(o => o.id === d.id);
-          if (!order) return;
-          const newReceived = preciseCalc(() => (Number(order.receivedAmount) || 0) + allocated);
-          updateOrder(order.id, { receivedAmount: newReceived });
-      });
-
-      // 也同步写一笔还款记录（让 customer.totalDebt 按订单重算）
+      // 只写一笔还款记录（不修改订单 receivedAmount，避免双重扣减）
       addRepayment({
           id: Date.now().toString(),
           customerId: viewingDebtCustomer.id,
@@ -449,7 +434,7 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
               { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
               { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0) },
           ].filter(m => m.amount > 0) : undefined,
-          note: repayForm.note || `偿还 ${debtOrders.length} 笔订单`
+          note: repayForm.note || `偿还 ${debtOrders.length} 笔订单：${debtOrders.map(d => d.orderNo).join(',')}`
       });
 
       alert(`✅ 收款成功！（共 ${debtOrders.length} 笔订单 / ¥${actual}）`);
@@ -458,8 +443,8 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       setRepayingCustomer(null);
   };
 
-  // 普通收款（不勾选订单）：按时间顺序从最老的欠款订单开始，把金额分摊到订单的 receivedAmount
-  // 同时写一笔还款记录做审计痕迹
+  // 普通收款（不勾选订单）：只创建还款记录，不修改订单 receivedAmount
+  // 债务 = sum(订单未付金额) - sum(还款金额)
   const handleSubmitRepayment = () => {
       if (!repayingCustomer) return;
       
@@ -475,39 +460,24 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       if (isNaN(amount) || amount <= 0) return alert('请输入有效还款金额');
       if (!repayForm.payee) return alert('请选择收款人');
 
-      // 1) 拿到该客户所有 ACTIVE 的欠款订单，按创建时间从早到晚
-      const debtOrders = data.orders
-          .filter(o =>
-              o.customerId === repayingCustomer.id &&
-              o.status === OrderStatus.ACTIVE &&
-              Math.max(0, (Number(o.totalAmount) || 0) - (Number(o.discount) || 0) - (Number(o.receivedAmount) || 0)) > 0
-          )
-          .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+      // 确认客户至少有欠款订单
+      const hasDebtOrders = data.orders.some(o =>
+          o.customerId === repayingCustomer.id &&
+          o.status === OrderStatus.ACTIVE &&
+          Math.max(0, (Number(o.totalAmount) || 0) - (Number(o.discount) || 0) - (Number(o.receivedAmount) || 0)) > 0
+      );
 
-      if (debtOrders.length === 0) {
+      if (!hasDebtOrders) {
           alert('该客户没有待还款的订单');
           return;
       }
 
-      // 2) 分摊 amount 到每笔订单的 receivedAmount（按顺序：先还最老的）
-      let remaining = amount;
-      for (let i = 0; i < debtOrders.length; i++) {
-          if (remaining <= 0) break;
-          const o = debtOrders[i];
-          const orderDebt = preciseCalc(() => (Number(o.totalAmount) || 0) - (Number(o.discount) || 0) - (Number(o.receivedAmount) || 0));
-          const allocated = Math.min(remaining, orderDebt);
-          if (allocated <= 0) continue;
-          const newReceived = preciseCalc(() => (Number(o.receivedAmount) || 0) + allocated);
-          updateOrder(o.id, { receivedAmount: newReceived });
-          remaining = preciseCalc(() => remaining - allocated);
-      }
-
-      // 3) 写一笔还款记录（审计痕迹）
+      // 只写一笔还款记录（不修改订单 receivedAmount）
       addRepayment({ 
           id: Date.now().toString(), 
           customerId: repayingCustomer.id, 
           customerName: repayingCustomer.name, 
-          amount: preciseCalc(() => amount - remaining),  // 实际分摊到的金额
+          amount: amount, 
           date: new Date().toISOString(), 
           payee: repayForm.payee,
           paymentMethod: repayForm.method,
