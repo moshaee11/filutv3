@@ -254,9 +254,13 @@ const ProductFormFields: React.FC<{
   </div>
 );
 
-const ManageView: React.FC = () => {
+const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (v: string) => void }> = ({ initialSubView, onSubViewChange }) => {
   type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees' | 'template_list';
-  const [subView, setSubView] = useState<ViewState>('main');
+  const [subView, setSubViewInternal] = useState<ViewState>((initialSubView as ViewState) || 'main');
+  const setSubView = (v: ViewState) => {
+    setSubViewInternal(v);
+    onSubViewChange?.(v);
+  };
   
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -331,7 +335,7 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, cancelOrder, updateOrder, addRepayment, deleteRepayment, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, cancelOrder, updateOrder, addRepayment, deleteRepayment, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate, exportData, importData } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
@@ -562,18 +566,9 @@ const ManageView: React.FC = () => {
            {/* Data Backup & Restore */}
            <div className="col-span-2 grid grid-cols-2 gap-4">
                <div onClick={async () => {
-                   const backup = await data.exportData();
-                   // exportData now returns base64 string, we need to save it
-                   // But wait, exportData in store.tsx returns string.
-                   // We should update store.tsx to use the new downloadJSON utility or handle it here.
-                   // Let's check store.tsx exportData implementation.
-                   // It returns base64 string.
-                   // We should use downloadJSON directly with the data object instead of base64 string for the new utility.
-                   // Let's modify store.tsx to expose a method that triggers download/share directly.
-                   // For now, let's assume we can access the data object directly from `data` prop.
-                   const timestamp = new Date().toISOString().split('T')[0];
-                   await downloadJSON(data, `FruitPro_Backup_${timestamp}.json`);
-               }} className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all flex items-center gap-3">
+                  const timestamp = new Date().toISOString().split('T')[0];
+                  await downloadJSON(data, `FruitPro_Backup_${timestamp}.json`);
+              }} className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all flex items-center gap-3">
                    <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center shrink-0"><Share2 size={20} /></div>
                    <div>
                        <p className="font-black text-gray-800 text-sm">备份数据</p>
@@ -1291,10 +1286,16 @@ const ManageView: React.FC = () => {
                                   const newIso = `${orderEditForm.date}T${orderEditForm.time || '00:00'}:00.000Z`;
                                   let mix = undefined as { method: PaymentMethod; amount: number }[] | undefined;
                                   if (orderEditForm.paymentMethod === PaymentMethod.MIXED) {
-                                      const w = Math.floor(Number(orderEditForm.mixedWechat) || 0;
-                                      const a = Math.floor(Number(orderEditForm.mixedAlipay)) || 0;
-                                      const c = Math.floor(Number(orderEditForm.mixedCash)) || 0;
-                                      if (w + a + c > 0) mix = [{ method: PaymentMethod.WECHAT, amount: w }, { method: PaymentMethod.ALIPAY, amount: a }, { method: PaymentMethod.CASH, amount: c }].filter(m => m.amount > 0);
+                                      const w = Math.floor(Number(orderEditForm.mixedWechat) || 0);
+                                      const a = Math.floor(Number(orderEditForm.mixedAlipay) || 0);
+                                      const c = Math.floor(Number(orderEditForm.mixedCash) || 0);
+                                      if (w + a + c > 0) {
+                                          mix = [
+                                              { method: PaymentMethod.WECHAT, amount: w },
+                                              { method: PaymentMethod.ALIPAY, amount: a },
+                                              { method: PaymentMethod.CASH, amount: c }
+                                          ].filter(m => m.amount > 0);
+                                      }
                                   }
                                   updateOrder(order.id, {
                                       createdAt: newIso,

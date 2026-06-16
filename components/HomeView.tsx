@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
+import { preciseCalc } from '../utils';
 import { 
   Wallet, Send, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, X, Plus, CheckCircle2,

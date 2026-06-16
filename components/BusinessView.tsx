@@ -422,7 +422,7 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
 // --- Main BusinessView Component ---
 
-const BusinessView: React.FC = () => {
+const BusinessView: React.FC<{ onGoToReconcile?: () => void }> = () => {
   const { data } = useApp();
   
   // Initialize with today's date
