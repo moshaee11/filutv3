@@ -286,6 +286,24 @@ const ManageView: React.FC = () => {
   const [batchEditTime, setBatchEditTime] = useState('');
   const [batchEditPayee, setBatchEditPayee] = useState('');
 
+  // 单个订单编辑 state
+  const [orderEditForm, setOrderEditForm] = useState<{
+    date: string; time: string;
+    payee: string;
+    paymentMethod: PaymentMethod;
+    receivedAmount: string;
+    discount: string;
+    note: string;
+    mixedWechat: string; mixedAlipay: string; mixedCash: string;
+  }>({
+    date: '', time: '',
+    payee: '',
+    paymentMethod: PaymentMethod.CASH,
+    receivedAmount: '', discount: '',
+    note: '',
+    mixedWechat: '', mixedAlipay: '', mixedCash: ''
+  });
+
   // Forms
   const [batchForm, setBatchForm] = useState({ plate: '', cost: '', weight: '' });
   const [productForm, setProductForm] = useState({ name: '', category: '柑橘', mode: PricingMode.WEIGHT, sell: '', stock: '', tare: '0', threshold: '', unitWeight: '' });
@@ -320,6 +338,26 @@ const ManageView: React.FC = () => {
   const selectedProduct = useMemo(() => data.products.find(p => p.id === selectedProductId), [data.products, selectedProductId]);
 
   const activeBatches = useMemo(() => data.batches.filter(b => b && !b.isClosed).sort((a, b) => new Date(b.inboundDate).getTime() - new Date(a.inboundDate).getTime()), [data.batches]);
+
+  // 进入订单详情页时初始化编辑表单（仅在 selectedOrderId 变化时）
+  React.useEffect(() => {
+      if (subView !== 'order_detail' || !selectedOrder) return;
+      const order = selectedOrder;
+      const dateObj = new Date(order.createdAt || new Date());
+      const d = dateObj.toISOString().slice(0, 10);
+      const t = `${String(dateObj.getHours()).padStart(2, '0')}:${String(dateObj.getMinutes()).padStart(2, '0')}`;
+      setOrderEditForm({
+          date: d, time: t,
+          payee: order.payee || '',
+          paymentMethod: order.paymentMethod,
+          receivedAmount: String(order.receivedAmount),
+          discount: String(order.discount),
+          note: order.note || '',
+          mixedWechat: (order.mixedPayments?.find(m => m.method === PaymentMethod.WECHAT)?.amount.toString()) || '',
+          mixedAlipay: (order.mixedPayments?.find(m => m.method === PaymentMethod.ALIPAY)?.amount.toString()) || '',
+          mixedCash: (order.mixedPayments?.find(m => m.method === PaymentMethod.CASH)?.amount.toString()) || '',
+      });
+  }, [selectedOrderId]);
   
   // Helper to find which batch a product belongs to
   const getProductBatchId = (productId: string) => {
@@ -1012,7 +1050,28 @@ const ManageView: React.FC = () => {
                                className="w-5 h-5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
                            />
                        )}
-                       <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden">
+                       <div
+                           className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100 flex justify-between items-center relative overflow-hidden"
+                           onClick={() => {
+                               if (isBatchEditMode) return;
+                               // 点击还款卡片弹出简单编辑/删除
+                               const dateObj = new Date(rep.date);
+                               const d = dateObj.toISOString().slice(0, 10);
+                               const t = `${String(dateObj.getHours()).padStart(2,'0')}:${String(dateObj.getMinutes()).padStart(2,'0')}`;
+                               const newAmtRaw = prompt('修改还款金额（¥）', String(rep.amount));
+                               if (newAmtRaw === null) return;
+                               const newAmt = Math.floor(Number(newAmtRaw) || 0);
+                               const newPayee = prompt('修改收款人（留空不修改）', rep.payee || '') ?? rep.payee;
+                               if (confirm(`确认修改还款？金额¥${newAmt}，收款人${newPayee || '无'}`)) {
+                                   const newDate = prompt('修改日期（YYYY-MM-DD，留空不修改）', d) || d;
+                                   updateRepayment(rep.id, {
+                                       amount: newAmt,
+                                       date: newDate + `T${t}:00.000Z`,
+                                       payee: newPayee || ''
+                                   });
+                               }
+                           }}
+                       >
                           <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-400"></div>
                           <div className="pl-3">
                               <div className="flex items-center gap-2 mb-1">
@@ -1027,9 +1086,19 @@ const ManageView: React.FC = () => {
                           </div>
                           <div className="text-right">
                               <p className="font-black text-lg text-emerald-500">+¥{rep.amount}</p>
-                              <p className="text-[10px] text-gray-400 font-bold">已入账</p>
+                              <p className="text-[10px] text-gray-400 font-bold">点击修改</p>
                           </div>
                        </div>
+                       {!isBatchEditMode && (
+                           <button
+                               onClick={(e) => {
+                                   e.stopPropagation();
+                                   if (confirm('删除此还款记录？（会自动重算客户欠款）')) deleteRepayment(rep.id);
+                               }}
+                               className="p-2 rounded-xl bg-red-50 text-red-500 active:scale-95 transition-all shrink-0">
+                               <Trash2 size={16} />
+                           </button>
+                       )}
                     </div>
                  );
              }
@@ -1099,68 +1168,167 @@ const ManageView: React.FC = () => {
     );
   }
 
-  // ... (Rest of view logic remains same) ...
-  // 6. Order Detail View (Abbreviated, use previous content for full)
+  // 6. Order Detail View (可编辑)
   if (subView === 'order_detail' && selectedOrder) {
       const isCancelled = selectedOrder.status === OrderStatus.CANCELLED;
-      // ... (Same order detail code as before)
-       return (
-      <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
-         <header className="bg-[#2D3142] text-white p-6 pb-8 shrink-0 relative z-20">
-            <div className="flex justify-between items-center mb-6">
-               <button onClick={() => setSubView('history')} className="bg-white/10 p-2 rounded-full"><ArrowLeft size={20} /></button>
-               <h1 className="font-black text-lg">订单详情</h1>
-               <div className="w-9"></div>
-            </div>
-            <div className="text-center space-y-1">
-               <p className="text-3xl font-black">¥{selectedOrder.totalAmount}</p>
-               <p className={`text-sm font-bold opacity-80 ${isCancelled ? 'text-red-400' : ''}`}>{isCancelled ? '已作废' : '订单总额'}</p>
-            </div>
-         </header>
-         <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-6 relative z-10 pt-10">
-            <div className="space-y-4">
-               {selectedOrder.items && selectedOrder.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center border-b border-gray-50 pb-4 last:border-0">
-                     <div>
-                        <p className="font-black text-gray-800 text-lg">{item.productName}</p>
-                        <p className="text-xs text-gray-400 font-bold">{item.qty}件 | ¥{item.unitPrice}/单价</p>
-                     </div>
-                     <p className="font-black text-gray-900">¥{item.subtotal}</p>
-                  </div>
-               ))}
-            </div>
-            
-            <div className="bg-gray-50 p-6 rounded-2xl space-y-3">
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">客户</span><span className="font-black">{selectedOrder.customerName}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">开单人</span><span className="font-black">{selectedOrder.payee || '未记录'}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">支付方式</span><span className="font-black">{selectedOrder.paymentMethod}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">实收</span><span className="font-black text-emerald-600">¥{selectedOrder.receivedAmount}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">优惠/抹零</span><span className="font-black text-gray-800">¥{selectedOrder.discount}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">时间</span><span className="font-black text-gray-800">{new Date(selectedOrder.createdAt).toLocaleString()}</span></div>
-               <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">单号</span><span className="font-black text-gray-400 font-mono text-xs">{selectedOrder.orderNo}</span></div>
-               {selectedOrder.note && (
-                   <div className="pt-2 border-t border-gray-200 mt-2">
-                       <p className="text-xs text-gray-400 font-bold mb-1">备注</p>
-                       <p className="text-sm font-black text-gray-700">{selectedOrder.note}</p>
-                   </div>
-               )}
-            </div>
+      const order = selectedOrder;
+      const dateObj = new Date(order.createdAt || new Date());
+      const dateStr = dateObj.toISOString().slice(0, 10); // YYYY-MM-DD
+      const timeStr = `${String(dateObj.getHours()).padStart(2,'0')}:${String(dateObj.getMinutes()).padStart(2,'0')}`;
 
-            {!isCancelled && (
-                <button 
-                  onClick={() => { 
-                      deleteOrder(selectedOrder.id); 
-                      setSubView('history'); 
-                  }} 
-                  className="w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black text-lg active:bg-red-100 transition-all flex items-center justify-center gap-2"
+      // 表单初始化由顶部 useEffect 处理（避免每次输入都被重置）
+
+      const payMethodLabel = (
+        <div className="space-y-3">
+            <div className="flex justify-between items-center">
+                <span className="text-gray-500 font-bold text-sm">支付方式</span>
+                <select
+                    className="text-sm font-black text-gray-800 bg-white px-3 py-2 rounded-xl border border-gray-200 outline-none"
+                    value={orderEditForm.paymentMethod}
+                    onChange={e => setOrderEditForm({ ...orderEditForm, paymentMethod: e.target.value as PaymentMethod })}
                 >
-                  <Trash2 size={20} />
-                  删除此单 (自动退货/退库存)
-                </button>
+                    <option value={PaymentMethod.WECHAT}>微信</option>
+                    <option value={PaymentMethod.ALIPAY}>支付宝</option>
+                    <option value={PaymentMethod.CASH}>现金</option>
+                    <option value={PaymentMethod.MIXED}>混合</option>
+                </select>
+            </div>
+            {orderEditForm.paymentMethod === PaymentMethod.MIXED && (
+                <div className="bg-gray-100 rounded-2xl p-4 space-y-2">
+                    <p className="text-[10px] text-gray-400 font-bold">各渠道金额（其中之一填写）</p>
+                    <div className="grid grid-cols-3 gap-2">
+                        <input type="number" placeholder="微信" value={orderEditForm.mixedWechat} onChange={e => setOrderEditForm({ ...orderEditForm, mixedWechat: e.target.value })} className="bg-white text-center font-black text-sm rounded-xl outline-none p-2 border border-gray-200" />
+                        <input type="number" placeholder="支付宝" value={orderEditForm.mixedAlipay} onChange={e => setOrderEditForm({ ...orderEditForm, mixedAlipay: e.target.value })} className="bg-white text-center font-black text-sm rounded-xl outline-none p-2 border border-gray-200" />
+                        <input type="number" placeholder="现金" value={orderEditForm.mixedCash} onChange={e => setOrderEditForm({ ...orderEditForm, mixedCash: e.target.value })} className="bg-white text-center font-black text-sm rounded-xl outline-none p-2 border border-gray-200" />
+                    </div>
+                </div>
             )}
-         </div>
-      </div>
-    );
+            <div className="flex justify-between items-center">
+                <span className="text-gray-500 font-bold text-sm">实收金额</span>
+                <input type="number" step="0.01"
+                    className="text-sm font-black text-emerald-600 text-right bg-gray-50 px-3 py-2 rounded-xl outline-none border border-gray-200 w-32"
+                    value={orderEditForm.receivedAmount} onChange={e => setOrderEditForm({ ...orderEditForm, receivedAmount: e.target.value })} />
+            </div>
+            <div className="flex justify-between items-center">
+                <span className="text-gray-500 font-bold text-sm">优惠/抹零</span>
+                <input type="number" step="0.01"
+                    className="text-sm font-black text-gray-800 text-right bg-gray-50 px-3 py-2 rounded-xl outline-none border border-gray-200 w-32"
+                    value={orderEditForm.discount} onChange={e => setOrderEditForm({ ...orderEditForm, discount: e.target.value })} />
+            </div>
+        </div>
+      );
+
+      return (
+          <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
+              <header className="bg-[#2D3142] text-white p-6 pb-8 shrink-0 relative z-20">
+                  <div className="flex justify-between items-center mb-6">
+                      <button onClick={() => { setSubView('history'); setOrderEditForm({date:'',time:'',payee:'',paymentMethod:PaymentMethod.CASH,receivedAmount:'',discount:'',note:'',mixedWechat:'',mixedAlipay:'',mixedCash:''});}} className="bg-white/10 p-2 rounded-full"><ArrowLeft size={20} /></button>
+                      <h1 className="font-black text-lg">{isCancelled ? '已作废订单' : '订单详情'}</h1>
+                      <div className="w-9"></div>
+                  </div>
+                  <div className="text-center space-y-1">
+                      <p className="text-3xl font-black">¥{order.totalAmount}</p>
+                      <p className="text-sm font-bold opacity-80">订单总额</p>
+                  </div>
+              </header>
+              <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-5 relative z-10 pt-10 pb-32">
+                  <div className="space-y-3">
+                      {order.items && order.items.map((item, idx) => (
+                          <div key={idx} className="flex justify-between items-center border-b border-gray-50 pb-3 last:border-0">
+                              <div>
+                                  <p className="font-black text-gray-800">{item.productName}</p>
+                                  <p className="text-xs text-gray-400 font-bold">{item.qty}件 | ¥{item.unitPrice}/单价</p>
+                              </div>
+                              <p className="font-black text-gray-900">¥{item.subtotal}</p>
+                          </div>
+                      ))}
+                  </div>
+
+                  <div className="bg-gray-50 p-5 rounded-2xl space-y-3">
+                      <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">客户</span><span className="font-black">{order.customerName}</span></div>
+                      <div className="flex justify-between items-center">
+                          <span className="text-gray-500 font-bold text-sm">开单人</span>
+                          <select
+                              className="text-sm font-black text-gray-800 bg-white px-3 py-2 rounded-xl border border-gray-200 outline-none"
+                              value={orderEditForm.payee}
+                              onChange={e => setOrderEditForm({ ...orderEditForm, payee: e.target.value })}
+                          >
+                              <option value="">无经手人</option>
+                              {data.payees.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                      </div>
+
+                      {payMethodLabel}
+
+                      <div className="flex justify-between items-center">
+                          <span className="text-gray-500 font-bold text-sm">日期</span>
+                          <input type="date" className="text-sm font-black text-gray-800 bg-white px-3 py-2 rounded-xl border border-gray-200 outline-none" value={orderEditForm.date} onChange={e => setOrderEditForm({ ...orderEditForm, date: e.target.value })} />
+                      </div>
+                      <div className="flex justify-between items-center">
+                          <span className="text-gray-500 font-bold text-sm">时间</span>
+                          <input type="time" className="text-sm font-black text-gray-800 bg-white px-3 py-2 rounded-xl border border-gray-200 outline-none" value={orderEditForm.time} onChange={e => setOrderEditForm({ ...orderEditForm, time: e.target.value })} />
+                      </div>
+
+                      <div className="flex justify-between text-sm"><span className="text-gray-500 font-bold">单号</span><span className="font-black text-gray-400 font-mono text-xs">{order.orderNo}</span></div>
+
+                      <div className="pt-3 border-t border-gray-200 mt-2">
+                          <p className="text-xs text-gray-400 font-bold mb-2">备注</p>
+                          <textarea
+                              rows={2}
+                              value={orderEditForm.note}
+                              onChange={e => setOrderEditForm({ ...orderEditForm, note: e.target.value })}
+                              className="w-full text-sm font-black text-gray-700 bg-white p-3 rounded-xl outline-none border border-gray-200 resize-none"
+                              placeholder="无"
+                          />
+                      </div>
+                  </div>
+
+                  {!isCancelled && (
+                      <div className="space-y-3">
+                          <button
+                              onClick={() => {
+                                  // 保存修改
+                                  const newIso = `${orderEditForm.date}T${orderEditForm.time || '00:00'}:00.000Z`;
+                                  let mix = undefined as { method: PaymentMethod; amount: number }[] | undefined;
+                                  if (orderEditForm.paymentMethod === PaymentMethod.MIXED) {
+                                      const w = Math.floor(Number(orderEditForm.mixedWechat) || 0;
+                                      const a = Math.floor(Number(orderEditForm.mixedAlipay)) || 0;
+                                      const c = Math.floor(Number(orderEditForm.mixedCash)) || 0;
+                                      if (w + a + c > 0) mix = [{ method: PaymentMethod.WECHAT, amount: w }, { method: PaymentMethod.ALIPAY, amount: a }, { method: PaymentMethod.CASH, amount: c }].filter(m => m.amount > 0);
+                                  }
+                                  updateOrder(order.id, {
+                                      createdAt: newIso,
+                                      payee: orderEditForm.payee,
+                                      paymentMethod: orderEditForm.paymentMethod,
+                                      mixedPayments: mix,
+                                      receivedAmount: Math.floor(Number(orderEditForm.receivedAmount) || 0),
+                                      discount: Math.floor(Number(orderEditForm.discount) || 0),
+                                      note: orderEditForm.note
+                                  });
+                                  alert('订单已更新');
+                                  setOrderEditForm({date:'',time:'',payee:'',paymentMethod:PaymentMethod.CASH,receivedAmount:'',discount:'',note:'',mixedWechat:'',mixedAlipay:'',mixedCash:''});
+                                  setSubView('history');
+                              }}
+                              className="w-full py-4 bg-[#2ecc71] text-white rounded-2xl font-black text-lg shadow-md shadow-emerald-200 active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                              ✅ 保存修改
+                          </button>
+                          <button
+                              onClick={() => {
+                                  if (confirm('确认作废此订单？')) { cancelOrder(order.id); setSubView('history'); }
+                              }}
+                              className="w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black text-lg active:bg-red-100 transition-all flex items-center justify-center gap-2">
+                              <Trash2 size={18}/> 作废此单（自动退货/退库存）
+                          </button>
+                      </div>
+                  )}
+                  {isCancelled && (
+                      <div className="text-center py-8">
+                          <p className="font-black text-red-400 text-lg">此订单已作废</p>
+                      </div>
+                  )}
+              </div>
+          </div>
+      );
   }
 
   // 7. Inventory List View (Standard List) - Same as before

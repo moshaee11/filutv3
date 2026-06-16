@@ -285,7 +285,7 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
 
 // QuickModal 组件
 const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void }> = ({ type, onClose }) => {
-  const { data, addRepayment, addExpense, addCustomer } = useApp();
+  const { data, addRepayment, addExpense, addCustomer, updateOrder } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');
   const [form, setForm] = useState({ amount: '', type: '' });
   const [showAddCustomer, setShowAddCustomer] = useState(false);
@@ -307,29 +307,49 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
 
   // 新增：查看欠款明细的客户
   const [viewingDebtCustomer, setViewingDebtCustomer] = useState<Customer | null>(null);
+  // 新增：勾选要收款的订单
+  const [selectedDebtOrderIds, setSelectedDebtOrderIds] = useState<string[]>([]);
 
-  // 计算某客户的所有欠款订单
+  // 计算某客户的所有欠款订单（安全版，防白屏）
   const getDebtOrders = (customerId: string) => {
-      return data.orders
-          .filter(o => o.customerId === customerId && o.status === OrderStatus.ACTIVE)
-          .map(o => {
-              const debt = preciseCalc(() =>
-                  Math.max(0, o.totalAmount - o.discount - o.receivedAmount)
-              );
-              if (debt <= 0) return null;
-              return {
-                  id: o.id,
-                  orderNo: o.orderNo,
-                  createdAt: o.createdAt,
-                  totalAmount: o.totalAmount,
-                  receivedAmount: o.receivedAmount,
-                  discount: o.discount,
-                  debt,
-                  items: o.items.map((i: any) => `${i.productName}x${i.qty}`).join(', ')
-              };
-          })
-          .filter((x): x is { id: string; orderNo: string; createdAt: string; totalAmount: number; receivedAmount: number; discount: number; debt: number; items: string } => x !== null)
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      try {
+          if (!data.orders || !Array.isArray(data.orders)) return [];
+          return data.orders
+              .filter(o => {
+                  if (!o || !o.id) return false;
+                  if (o.customerId !== customerId) return false;
+                  if (o.status && o.status !== 'ACTIVE') return false;
+                  const total = Number(o.totalAmount) || 0;
+                  const disc = Number(o.discount) || 0;
+                  const paid = Number(o.receivedAmount) || 0;
+                  return Math.max(0, total - disc - paid) > 0;
+              })
+              .map(o => {
+                  const total = Number(o.totalAmount) || 0;
+                  const disc = Number(o.discount) || 0;
+                  const paid = Number(o.receivedAmount) || 0;
+                  const debt = preciseCalc(() => Math.max(0, total - disc - paid));
+                  const itemsArr = Array.isArray(o.items) ? o.items : [];
+                  return {
+                      id: o.id,
+                      orderNo: o.orderNo || '无单号',
+                      createdAt: o.createdAt || new Date().toISOString(),
+                      totalAmount: total,
+                      receivedAmount: paid,
+                      discount: disc,
+                      debt,
+                      items: itemsArr.map((i: any) => {
+                          const name = i?.productName || '商品';
+                          const qty = i?.qty || 0;
+                          return `${name}x${qty}`;
+                      }).join(', ') || '（无商品明细）'
+                  };
+              })
+              .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      } catch (e) {
+          console.error('getDebtOrders error', e);
+          return [];
+      }
   };
 
   const [expenseScope, setExpenseScope] = useState<'DAILY' | 'BATCH'>('DAILY');
@@ -370,6 +390,71 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
           payee: data.payees[0] || '',
           note: ''
       });
+  };
+
+  // 新：勾选具体订单后收款 —— 把还款金额分摊到每笔订单的 receivedAmount
+  const handleSubmitDebtOrderRepayment = (orderIds: string[]) => {
+      if (!viewingDebtCustomer) return;
+      if (!repayingCustomer) return;
+
+      let amount = 0;
+      if (repayForm.method === PaymentMethod.MIXED) {
+          amount = Math.floor((parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) +
+              (parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) +
+              (parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0));
+      } else {
+          amount = Math.floor(parseFloat(repayForm.amount) || 0);
+      }
+      if (isNaN(amount) || amount <= 0) return alert('请输入有效金额');
+      if (!repayForm.payee) return alert('请选择收款人');
+
+      const debtOrders = getDebtOrders(viewingDebtCustomer.id).filter(d => orderIds.includes(d.id));
+      if (debtOrders.length === 0) {
+          // 用户没选任何订单 → 走普通还款逻辑
+          handleSubmitRepayment();
+          return;
+      }
+      const totalDebtOfSelected = preciseCalc(() => debtOrders.reduce((s, d) => s + d.debt, 0));
+      const actual = Math.min(amount, totalDebtOfSelected);
+      if (actual <= 0) return alert('金额无效');
+
+      // 按比例分摊到每笔订单的 receivedAmount
+      let remaining = actual;
+      debtOrders.forEach((d, idx) => {
+          let allocated: number;
+          if (idx === debtOrders.length - 1) {
+              allocated = remaining;
+          } else {
+              allocated = preciseCalc(() => actual * d.debt / totalDebtOfSelected);
+          }
+          remaining = preciseCalc(() => remaining - allocated);
+          const order = data.orders.find(o => o.id === d.id);
+          if (!order) return;
+          const newReceived = preciseCalc(() => (Number(order.receivedAmount) || 0) + allocated);
+          updateOrder(order.id, { receivedAmount: newReceived });
+      });
+
+      // 也同步写一笔还款记录（让 customer.totalDebt 按订单重算）
+      addRepayment({
+          id: Date.now().toString(),
+          customerId: viewingDebtCustomer.id,
+          customerName: viewingDebtCustomer.name,
+          amount: actual,
+          date: new Date().toISOString(),
+          payee: repayForm.payee,
+          paymentMethod: repayForm.method,
+          mixedPayments: repayForm.method === PaymentMethod.MIXED ? [
+              { method: PaymentMethod.WECHAT, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) },
+              { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
+              { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0) },
+          ].filter(m => m.amount > 0) : undefined,
+          note: repayForm.note || `偿还 ${debtOrders.length} 笔订单`
+      });
+
+      alert(`✅ 收款成功！（共 ${debtOrders.length} 笔订单 / ¥${actual}）`);
+      setSelectedDebtOrderIds([]);
+      setViewingDebtCustomer(null);
+      setRepayingCustomer(null);
   };
 
   const handleSubmitRepayment = () => {
@@ -527,8 +612,14 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                     </div>
                  </div>
 
-                 <button 
-                    onClick={handleSubmitRepayment}
+                 <button
+                    onClick={() => {
+                      if (viewingDebtCustomer && selectedDebtOrderIds.length > 0) {
+                        handleSubmitDebtOrderRepayment(selectedDebtOrderIds);
+                      } else {
+                        handleSubmitRepayment();
+                      }
+                    }}
                     className="w-full bg-gray-900 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-gray-200 active:scale-95 transition-all"
                  >
                     确认收款
@@ -595,14 +686,19 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
            )}
         </div>
 
-        {/* 新增：某客户欠款订单明细弹窗 */}
-        {viewingDebtCustomer && (
+        {/* 某客户欠款订单明细弹窗（支持勾选具体订单 + 直接收款） */}
+        {viewingDebtCustomer && !repayingCustomer && (
           <div className="fixed inset-0 z-[350] bg-[#F1F3F6] flex flex-col animate-in slide-in-from-right">
             <header className="bg-white px-4 py-4 flex items-center shrink-0 border-b border-gray-100 shadow-sm z-10">
-              <button onClick={() => setViewingDebtCustomer(null)} className="text-[#3b82f6] text-base font-bold active:scale-95 transition-all">返回</button>
+              <button
+                onClick={() => { setViewingDebtCustomer(null); setSelectedDebtOrderIds([]); }}
+                className="text-[#3b82f6] text-base font-bold active:scale-95 transition-all"
+              >返回</button>
               <div className="flex-1 text-center pr-8">
                 <h1 className="font-black text-lg text-[#1f2937]">{viewingDebtCustomer.name} 的欠款</h1>
-                <p className="text-xs text-[#ef4444] font-bold mt-0.5">总欠款: ¥{viewingDebtCustomer.totalDebt.toLocaleString()}</p>
+                <p className="text-xs text-[#ef4444] font-bold mt-0.5">
+                  共 {(() => { const ds = getDebtOrders(viewingDebtCustomer.id); return ds.length; })()} 笔 / 合计 ¥{(() => { const ds = getDebtOrders(viewingDebtCustomer.id); return ds.reduce((s,d)=>s+d.debt,0).toLocaleString(); })()}
+                </p>
               </div>
             </header>
 
@@ -615,44 +711,100 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                 return debtOrders.map(order => {
                   const date = new Date(order.createdAt);
                   const dateStr = `${date.getFullYear()}/${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getDate().toString().padStart(2,'0')} ${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+                  const checked = selectedDebtOrderIds.includes(order.id);
                   return (
-                    <div key={order.id} className="bg-white p-4 rounded-[1.2rem] shadow-sm border border-gray-50 space-y-3">
-                      <div className="flex justify-between items-start">
-                        <div className="space-y-1 flex-1">
-                          <p className="text-sm font-black text-gray-800">{order.orderNo}</p>
-                          <p className="text-xs text-gray-400 font-bold">{dateStr}</p>
-                          {order.items && <p className="text-xs text-gray-500 mt-1">{order.items}</p>}
+                    <div key={order.id}
+                      className={`bg-white rounded-[1.2rem] shadow-sm border-2 transition-all ${checked ? 'border-[#3b82f6]' : 'border-gray-50'}`}
+                      onClick={() => {
+                        if (checked) setSelectedDebtOrderIds(prev => prev.filter(id => id !== order.id));
+                        else setSelectedDebtOrderIds(prev => [...prev, order.id]);
+                      }}
+                    >
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <input type="checkbox" checked={checked} readOnly
+                            className="mt-1 w-5 h-5 rounded border-gray-300 text-[#3b82f6] focus:ring-2 focus:ring-[#3b82f6]" />
+                          <div className="flex-1 space-y-1">
+                            <p className="text-sm font-black text-gray-800">{order.orderNo}</p>
+                            <p className="text-xs text-gray-400 font-bold">{dateStr}</p>
+                            {order.items && <p className="text-xs text-gray-500 mt-1">{order.items}</p>}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100">
+                          <div>
+                            <p className="text-[10px] text-gray-400 font-bold">订单金额</p>
+                            <p className="text-sm font-black text-gray-800">¥{order.totalAmount.toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 font-bold">已收</p>
+                            <p className="text-sm font-black text-emerald-600">¥{order.receivedAmount.toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-gray-400 font-bold">欠款</p>
+                            <p className="text-sm font-black text-red-500">¥{order.debt.toLocaleString()}</p>
+                          </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100">
-                        <div>
-                          <p className="text-[10px] text-gray-400 font-bold">订单金额</p>
-                          <p className="text-sm font-black text-gray-800">¥{order.totalAmount.toLocaleString()}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-gray-400 font-bold">已收</p>
-                          <p className="text-sm font-black text-emerald-600">¥{order.receivedAmount.toLocaleString()}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] text-gray-400 font-bold">欠款</p>
-                          <p className="text-sm font-black text-red-500">¥{order.debt.toLocaleString()}</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setViewingDebtCustomer(null);
-                          // 直接进入该客户的收款面板
-                          handleOpenRepay(viewingDebtCustomer);
-                        }}
-                        className="w-full bg-[#3b82f6] text-white py-3 rounded-xl font-black text-sm shadow-md active:scale-95 transition-all"
-                      >
-                        对该客户进行收款
-                      </button>
                     </div>
                   );
                 });
               })()}
             </div>
+
+            {/* 底部：全选 / 收款按钮 */}
+            {(() => {
+              const debtOrders = getDebtOrders(viewingDebtCustomer.id);
+              if (debtOrders.length === 0) return null;
+              const allChecked = debtOrders.length > 0 && selectedDebtOrderIds.length === debtOrders.length;
+              const selectedTotal = debtOrders.filter(d => selectedDebtOrderIds.includes(d.id)).reduce((s,d)=>s+d.debt,0);
+              return (
+                <div className="shrink-0 bg-white border-t border-gray-100 p-4 pb-6 space-y-3 shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
+                  <div className="flex items-center justify-between text-sm">
+                    <button
+                      onClick={() => {
+                        if (allChecked) setSelectedDebtOrderIds([]);
+                        else setSelectedDebtOrderIds(debtOrders.map(d => d.id));
+                      }}
+                      className="text-[#3b82f6] font-bold active:scale-95 transition-all"
+                    >{allChecked ? '取消全选' : '全选'}</button>
+                    <span className="text-gray-500 font-bold">
+                      {selectedDebtOrderIds.length > 0
+                        ? `已选 ${selectedDebtOrderIds.length} 笔，¥${selectedTotal.toLocaleString()}`
+                        : '请勾选要收款的订单'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (selectedDebtOrderIds.length === 0) {
+                        alert('请先勾选至少一笔欠款订单');
+                        return;
+                      }
+                      // 打开还款金额输入面板（金额默认 = 勾选订单的欠款合计）
+                      setRepayingCustomer(viewingDebtCustomer);
+                      setRepayForm({
+                        amount: selectedTotal.toString(),
+                        method: PaymentMethod.WECHAT,
+                        mixedPayments: {
+                          [PaymentMethod.WECHAT]: '',
+                          [PaymentMethod.ALIPAY]: '',
+                          [PaymentMethod.CASH]: ''
+                        } as Record<PaymentMethod, string>,
+                        payee: data.payees[0] || '',
+                        note: ''
+                      });
+                    }}
+                    disabled={selectedDebtOrderIds.length === 0}
+                    className={`w-full py-4 rounded-2xl font-black text-base shadow-lg active:scale-95 transition-all ${
+                      selectedDebtOrderIds.length > 0
+                        ? 'bg-[#3b82f6] text-white shadow-blue-200'
+                        : 'bg-gray-200 text-gray-400'
+                    }`}
+                  >
+                    {selectedDebtOrderIds.length > 0 ? `对 ${selectedDebtOrderIds.length} 笔订单收款（¥${selectedTotal.toLocaleString()}）` : '请勾选要收款的订单'}
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         )}
 
