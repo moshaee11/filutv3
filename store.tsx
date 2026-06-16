@@ -65,6 +65,8 @@ const initialData: AppData = {
 };
 
 // --- 辅助函数：全量重算客户欠款 ---
+// 规则：订单的 receivedAmount 就是"已收了多少"的唯一来源，customer.totalDebt = sum(订单未付金额)
+// 还款记录只是审计痕迹，不再用于扣减（避免双重扣减导致债务为 0 或负数）
 const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers: Customer[]): Customer[] => {
   const debtMap = new Map<string, number>();
 
@@ -75,13 +77,6 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
         const current = debtMap.get(o.customerId) || 0;
         debtMap.set(o.customerId, preciseCalc(() => current + debt));
       }
-    }
-  });
-
-  repayments.forEach(r => {
-    if (r.customerId) {
-      const current = debtMap.get(r.customerId) || 0;
-      debtMap.set(r.customerId, preciseCalc(() => current - r.amount));
     }
   });
 

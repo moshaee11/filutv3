@@ -458,6 +458,8 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       setRepayingCustomer(null);
   };
 
+  // 普通收款（不勾选订单）：按时间顺序从最老的欠款订单开始，把金额分摊到订单的 receivedAmount
+  // 同时写一笔还款记录做审计痕迹
   const handleSubmitRepayment = () => {
       if (!repayingCustomer) return;
       
@@ -473,11 +475,39 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
       if (isNaN(amount) || amount <= 0) return alert('请输入有效还款金额');
       if (!repayForm.payee) return alert('请选择收款人');
 
+      // 1) 拿到该客户所有 ACTIVE 的欠款订单，按创建时间从早到晚
+      const debtOrders = data.orders
+          .filter(o =>
+              o.customerId === repayingCustomer.id &&
+              o.status === OrderStatus.ACTIVE &&
+              Math.max(0, (Number(o.totalAmount) || 0) - (Number(o.discount) || 0) - (Number(o.receivedAmount) || 0)) > 0
+          )
+          .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+
+      if (debtOrders.length === 0) {
+          alert('该客户没有待还款的订单');
+          return;
+      }
+
+      // 2) 分摊 amount 到每笔订单的 receivedAmount（按顺序：先还最老的）
+      let remaining = amount;
+      for (let i = 0; i < debtOrders.length; i++) {
+          if (remaining <= 0) break;
+          const o = debtOrders[i];
+          const orderDebt = preciseCalc(() => (Number(o.totalAmount) || 0) - (Number(o.discount) || 0) - (Number(o.receivedAmount) || 0));
+          const allocated = Math.min(remaining, orderDebt);
+          if (allocated <= 0) continue;
+          const newReceived = preciseCalc(() => (Number(o.receivedAmount) || 0) + allocated);
+          updateOrder(o.id, { receivedAmount: newReceived });
+          remaining = preciseCalc(() => remaining - allocated);
+      }
+
+      // 3) 写一笔还款记录（审计痕迹）
       addRepayment({ 
           id: Date.now().toString(), 
           customerId: repayingCustomer.id, 
           customerName: repayingCustomer.name, 
-          amount: amount, 
+          amount: preciseCalc(() => amount - remaining),  // 实际分摊到的金额
           date: new Date().toISOString(), 
           payee: repayForm.payee,
           paymentMethod: repayForm.method,
