@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate, PendingOrder } from './types';
+import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate, PendingOrder, StockLog, OpLog } from './types';
 import { preciseCalc, downloadJSON } from './utils';
 
 interface AppContextType {
@@ -12,13 +12,14 @@ interface AppContextType {
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (id: string) => void;
-  adjustStock: (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number) => void;
+  adjustStock: (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number, reason?: string) => void;
   addOrder: (o: Order) => void;
   cancelOrder: (id: string) => void;
   deleteOrder: (id: string) => void;
   updateOrder: (id: string, updates: Partial<Order>) => void;
   addRepayment: (r: Repayment) => void;
   updateRepayment: (id: string, updates: Partial<Repayment>) => void;
+  deleteRepayment: (id: string) => void;
   addExpense: (e: Expense) => void;
   addBatch: (b: Batch) => void;
   updateBatch: (b: Batch) => void;
@@ -30,16 +31,17 @@ interface AppContextType {
   updatePayee: (oldName: string, newName: string) => void;
   deletePayee: (name: string) => void;
   addCustomer: (c: Customer) => void;
+  updateCustomer: (id: string, updates: Partial<Customer>) => void;
+  deleteCustomer: (id: string) => void;
   importData: (jsonStr: string) => void;
   exportData: () => string;
-  // Template Methods
   addTemplate: (t: ProductTemplate) => void;
   deleteTemplate: (id: string) => void;
-  // Pending Orders & History
   addPendingOrder: (p: PendingOrder) => void;
   removePendingOrder: (id: string) => void;
   getLastPrice: (customerId: string, productId: string) => number | null;
   archiveOldData: (months: number) => void;
+  addOpLog: (type: OpLog['type'], description: string, before?: any, after?: any) => void;
 }
 
 const STORAGE_KEY = 'FRUIT_PRO_DATA_V3';
@@ -60,7 +62,9 @@ const initialData: AppData = {
     { id: 't1', name: '砂糖橘-大框', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 2.5, defaultPrice: 3.5, lowStockThreshold: 20, unitWeight: 40 },
     { id: 't2', name: '砂糖橘-精品', category: '柑橘', pricingMode: PricingMode.WEIGHT, defaultTare: 1.5, defaultPrice: 4.2, lowStockThreshold: 10, unitWeight: 20 },
   ],
-  pendingOrders: []
+  pendingOrders: [],
+  stockLogs: [],
+  opLogs: [],
 };
 
 // --- 辅助函数：全量重算客户欠款 ---
@@ -114,7 +118,11 @@ const sanitizeData = (incoming: any): AppData => {
 
   let cleanCustomers = safeArray<Customer>(incoming.customers, (c) => !!c.id && !!c.name).map((c: any) => ({
       ...c,
-      totalDebt: Number(c.totalDebt) || 0
+      totalDebt: Number(c.totalDebt) || 0,
+      wechat: c.wechat || '',
+      address: c.address || '',
+      note: c.note || '',
+      createdAt: c.createdAt || ''
   }));
 
   cleanCustomers = recalculateAllDebts(cleanOrders, cleanRepayments, cleanCustomers);
@@ -143,6 +151,8 @@ const sanitizeData = (incoming: any): AppData => {
     expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
     templates: safeArray<ProductTemplate>(incoming.templates, (t) => !!t.id && !!t.name),
     pendingOrders: safeArray<PendingOrder>(incoming.pendingOrders, (p) => !!p.id && !!p.items),
+    stockLogs: safeArray<StockLog>(incoming.stockLogs, (l) => !!l.id && !!l.productId),
+    opLogs: safeArray<OpLog>(incoming.opLogs, (l) => !!l.id && !!l.type),
   };
 };
 
@@ -156,9 +166,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!saved) return initialData;
       const parsed = JSON.parse(saved);
       const cleanData = sanitizeData(parsed);
+      
+      const originalOrderCount = Array.isArray(parsed.orders) ? parsed.orders.length : 0;
+      const cleanOrderCount = cleanData.orders?.length || 0;
+      
+      if (originalOrderCount > 0 && cleanOrderCount === 0) {
+        console.warn('Data sanitization removed all orders - backing up corrupted data');
+        try {
+          localStorage.setItem(CORRUPT_BACKUP_KEY, saved);
+        } catch (e) {
+          console.error('Failed to backup corrupted data', e);
+        }
+      }
+      
       return { ...initialData, ...cleanData };
     } catch (e) {
       console.error("Failed to parse local storage", e);
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          localStorage.setItem(CORRUPT_BACKUP_KEY, saved);
+        }
+      } catch (backupErr) {
+        console.error("Failed to backup corrupted data", backupErr);
+      }
       return initialData;
     }
   });
@@ -180,21 +211,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateProduct = (p: Product) => setData(prev => ({ ...prev, products: prev.products.map(old => old.id === p.id ? p : old) }));
   const deleteProduct = (id: string) => setData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
   
-  const adjustStock = (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number) => {
-    setData(prev => ({
-      ...prev,
-      products: prev.products.map(p => 
-        p.id === productId ? { 
-            ...p, 
-            stockQty: newQty, 
-            stockWeight: newWeight,
-            initialStockQty: newInitialQty,
-            initialStockWeight: newInitialWeight
-        } : p
-      )
-    }));
-  };
-
   const addBatch = (b: Batch) => setData(prev => ({ ...prev, batches: [b, ...prev.batches] }));
   const updateBatch = (b: Batch) => setData(prev => ({ ...prev, batches: prev.batches.map(old => old.id === b.id ? b : old) }));
   
@@ -225,6 +241,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deletePayee = (name: string) => setData(prev => ({ ...prev, payees: prev.payees.filter(p => p !== name) }));
 
   const addCustomer = (c: Customer) => setData(prev => ({ ...prev, customers: [...prev.customers, c] }));
+
+  const updateCustomer = (id: string, updates: Partial<Customer>) => {
+    setData(prev => {
+      const before = prev.customers.find(c => c.id === id);
+      if (!before || before.isGuest) return prev;
+      const newCustomers = prev.customers.map(c =>
+        c.id === id ? { ...c, ...updates } : c
+      );
+
+      let opLog: OpLog | null = null;
+      const changes: string[] = [];
+      if (updates.name !== undefined && updates.name !== before.name) {
+        changes.push(`姓名 ${before.name} → ${updates.name}`);
+      }
+      if (updates.phone !== undefined && updates.phone !== before.phone) {
+        changes.push(`电话 ${before.phone || '空'} → ${updates.phone || '空'}`);
+      }
+      if (updates.wechat !== undefined && updates.wechat !== before.wechat) {
+        changes.push(`微信 ${before.wechat || '空'} → ${updates.wechat || '空'}`);
+      }
+      if (updates.address !== undefined && updates.address !== before.address) {
+        changes.push(`地址 ${before.address || '空'} → ${updates.address || '空'}`);
+      }
+      if (changes.length > 0) {
+        opLog = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'CUSTOMER_EDIT',
+          description: `修改客户（${before.name}）：${changes.join('，')}`,
+          beforeSnapshot: before,
+          afterSnapshot: updates,
+          createdAt: new Date().toISOString()
+        };
+      }
+
+      return {
+        ...prev,
+        customers: newCustomers,
+        opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
+      };
+    });
+  };
+
+  const deleteCustomer = (id: string) => {
+    setData(prev => {
+      const target = prev.customers.find(c => c.id === id);
+      if (!target || target.isGuest) return prev;
+
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'CUSTOMER_EDIT',
+        description: `删除客户：${target.name}`,
+        beforeSnapshot: target,
+        createdAt: new Date().toISOString()
+      };
+
+      return {
+        ...prev,
+        customers: prev.customers.filter(c => c.id !== id),
+        opLogs: [opLog, ...prev.opLogs]
+      };
+    });
+  };
+
+  const addOpLog = (type: OpLog['type'], description: string, before?: any, after?: any) => {
+    setData(prev => {
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        description,
+        beforeSnapshot: before,
+        afterSnapshot: after,
+        createdAt: new Date().toISOString()
+      };
+      return { ...prev, opLogs: [opLog, ...prev.opLogs] };
+    });
+  };
   
   const addTemplate = (t: ProductTemplate) => setData(prev => ({ ...prev, templates: [...(prev.templates || []), t] }));
   const deleteTemplate = (id: string) => setData(prev => ({ ...prev, templates: (prev.templates || []).filter(t => t.id !== id) }));
@@ -297,6 +389,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addOrder = (o: Order) => {
     setData(prev => {
+      // 1) 扣库存
       const newProducts = prev.products.map(p => {
         const item = o.items.find(i => i.productId === p.id);
         if (item) {
@@ -309,6 +402,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
+      // 2) 生成库存流水（出库）
+      const newStockLogs: StockLog[] = o.items
+        .filter(i => i.qty > 0 || i.netWeight > 0)
+        .map(i => {
+          const prod = newProducts.find(p => p.id === i.productId);
+          return {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            productId: i.productId,
+            productName: i.productName,
+            type: 'OUTBOUND' as const,
+            qtyChange: -i.qty,
+            weightChange: -i.netWeight,
+            qtyAfter: prod?.stockQty ?? 0,
+            weightAfter: prod?.stockWeight ?? 0,
+            reason: '开单出库',
+            relatedOrderId: o.id,
+            createdAt: new Date().toISOString()
+          };
+        });
+
+      // 3) 重算客户欠款
       const debtAmount = preciseCalc(() => Math.max(0, o.totalAmount - o.discount - o.receivedAmount));
       let newCustomers = prev.customers;
       
@@ -322,11 +436,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
 
+      // 4) 操作日志
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'ORDER_EDIT',
+        description: `新增订单 ${o.orderNo}，客户：${o.customerName}，金额：¥${o.totalAmount - o.discount}`,
+        afterSnapshot: { orderNo: o.orderNo, customer: o.customerName, total: o.totalAmount - o.discount },
+        createdAt: new Date().toISOString()
+      };
+
       return {
         ...prev,
         products: newProducts,
         customers: newCustomers,
-        orders: [o, ...prev.orders]
+        orders: [o, ...prev.orders],
+        stockLogs: [...newStockLogs, ...prev.stockLogs],
+        opLogs: [opLog, ...prev.opLogs]
       };
     });
   };
@@ -336,6 +461,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const targetOrder = prev.orders.find(o => o.id === id);
       if (!targetOrder || targetOrder.status === OrderStatus.CANCELLED) return prev;
 
+      // 1) 回退库存
       const newProducts = prev.products.map(p => {
         const item = targetOrder.items.find(i => i.productId === p.id);
         if (item) {
@@ -348,6 +474,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       });
 
+      // 2) 库存流水（作废回退）
+      const newStockLogs: StockLog[] = targetOrder.items
+        .filter(i => i.qty > 0 || i.netWeight > 0)
+        .map(i => {
+          const prod = newProducts.find(p => p.id === i.productId);
+          return {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            productId: i.productId,
+            productName: i.productName,
+            type: 'CANCEL_RETURN' as const,
+            qtyChange: i.qty,
+            weightChange: i.netWeight,
+            qtyAfter: prod?.stockQty ?? 0,
+            weightAfter: prod?.stockWeight ?? 0,
+            reason: '订单作废回退',
+            relatedOrderId: targetOrder.id,
+            createdAt: new Date().toISOString()
+          };
+        });
+
+      // 3) 重算客户欠款
       const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
       let newCustomers = prev.customers;
       
@@ -361,11 +508,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
 
+      // 4) 操作日志
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'ORDER_CANCEL',
+        description: `作废订单 ${targetOrder.orderNo}，客户：${targetOrder.customerName}，金额：¥${targetOrder.totalAmount - targetOrder.discount}`,
+        beforeSnapshot: { orderNo: targetOrder.orderNo, customer: targetOrder.customerName, total: targetOrder.totalAmount - targetOrder.discount },
+        createdAt: new Date().toISOString()
+      };
+
       return {
         ...prev,
         products: newProducts,
         customers: newCustomers,
-        orders: prev.orders.map(o => o.id === id ? { ...o, status: OrderStatus.CANCELLED } : o)
+        orders: prev.orders.map(o => o.id === id ? { ...o, status: OrderStatus.CANCELLED, updatedAt: new Date().toISOString() } : o),
+        stockLogs: [...newStockLogs, ...prev.stockLogs],
+        opLogs: [opLog, ...prev.opLogs]
       };
     });
   };
@@ -377,8 +535,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         let newProducts = prev.products;
         let newCustomers = prev.customers;
+        let newStockLogs: StockLog[] = [];
 
         if (targetOrder.status === OrderStatus.ACTIVE) {
+            // 回退库存
             newProducts = prev.products.map(p => {
                 const item = targetOrder.items.find(i => i.productId === p.id);
                 if (item) {
@@ -390,6 +550,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
                 return p;
             });
+
+            // 库存流水（删除回退）
+            newStockLogs = targetOrder.items
+              .filter(i => i.qty > 0 || i.netWeight > 0)
+              .map(i => {
+                const prod = newProducts.find(p => p.id === i.productId);
+                return {
+                  id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  productId: i.productId,
+                  productName: i.productName,
+                  type: 'CANCEL_RETURN' as const,
+                  qtyChange: i.qty,
+                  weightChange: i.netWeight,
+                  qtyAfter: prod?.stockQty ?? 0,
+                  weightAfter: prod?.stockWeight ?? 0,
+                  reason: '订单删除回退',
+                  relatedOrderId: targetOrder.id,
+                  createdAt: new Date().toISOString()
+                };
+              });
 
             const debtAmount = preciseCalc(() => Math.max(0, targetOrder.totalAmount - targetOrder.discount - targetOrder.receivedAmount));
             const shouldRevertDebt = debtAmount > 0 && targetOrder.customerId !== 'guest';
@@ -403,42 +583,161 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
         }
 
+        // 操作日志
+        const opLog: OpLog = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'ORDER_DELETE',
+          description: `删除订单 ${targetOrder.orderNo}，客户：${targetOrder.customerName}，金额：¥${targetOrder.totalAmount - targetOrder.discount}`,
+          beforeSnapshot: { orderNo: targetOrder.orderNo, customer: targetOrder.customerName, total: targetOrder.totalAmount - targetOrder.discount },
+          createdAt: new Date().toISOString()
+        };
+
         return {
             ...prev,
             products: newProducts,
             customers: newCustomers,
-            orders: prev.orders.filter(o => o.id !== id)
+            orders: prev.orders.filter(o => o.id !== id),
+            stockLogs: [...newStockLogs, ...prev.stockLogs],
+            opLogs: [opLog, ...prev.opLogs]
         };
     });
   };
 
   const updateOrder = (id: string, updates: Partial<Order>) => {
-    setData(prev => ({
-      ...prev,
-      orders: prev.orders.map(o => o.id === id ? { ...o, ...updates } : o)
-    }));
+    setData(prev => {
+      const before = prev.orders.find(o => o.id === id);
+      const newOrders = prev.orders.map(o =>
+        o.id === id ? { ...o, ...updates, updatedAt: new Date().toISOString() } : o
+      );
+      const newCustomers = recalculateAllDebts(newOrders, prev.repayments, prev.customers);
+
+      // 操作日志
+      let opLog: OpLog | null = null;
+      if (before) {
+        const changes: string[] = [];
+        if (updates.totalAmount !== undefined && updates.totalAmount !== before.totalAmount) {
+          changes.push(`金额 ¥${before.totalAmount} → ¥${updates.totalAmount}`);
+        }
+        if (updates.discount !== undefined && updates.discount !== before.discount) {
+          changes.push(`优惠 ¥${before.discount} → ¥${updates.discount}`);
+        }
+        if (updates.receivedAmount !== undefined && updates.receivedAmount !== before.receivedAmount) {
+          changes.push(`实收 ¥${before.receivedAmount} → ¥${updates.receivedAmount}`);
+        }
+        if (updates.paymentMethod !== undefined && updates.paymentMethod !== before.paymentMethod) {
+          changes.push(`支付方式 ${before.paymentMethod} → ${updates.paymentMethod}`);
+        }
+        if (updates.status !== undefined && updates.status !== before.status) {
+          changes.push(`状态 ${before.status} → ${updates.status}`);
+        }
+        if (changes.length > 0) {
+          opLog = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: 'ORDER_EDIT',
+            description: `修改订单 ${before.orderNo}：${changes.join('，')}`,
+            beforeSnapshot: before,
+            afterSnapshot: updates,
+            createdAt: new Date().toISOString()
+          };
+        }
+      }
+
+      return {
+        ...prev,
+        orders: newOrders,
+        customers: newCustomers,
+        opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
+      };
+    });
   };
 
   const addRepayment = (r: Repayment) => {
     setData(prev => {
-      const newCustomers = prev.customers.map(c => 
-        c.id === r.customerId 
-          ? { ...c, totalDebt: Math.max(0, preciseCalc(() => c.totalDebt - r.amount)) } 
-          : c
-      );
+      const normalized: Repayment = {
+        ...r,
+        createdAt: r.createdAt || new Date().toISOString(),
+      };
+      const newRepayments = [normalized, ...prev.repayments];
+      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+
+      // 操作日志
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'DEBT_CHANGE',
+        description: `收款 ¥${r.amount}，客户：${r.customerName}，方式：${r.paymentMethod || '现金'}`,
+        afterSnapshot: { customer: r.customerName, amount: r.amount, method: r.paymentMethod },
+        createdAt: new Date().toISOString()
+      };
+
       return {
         ...prev,
         customers: newCustomers,
-        repayments: [r, ...prev.repayments]
+        repayments: newRepayments,
+        opLogs: [opLog, ...prev.opLogs]
       };
     });
   };
 
   const updateRepayment = (id: string, updates: Partial<Repayment>) => {
-    setData(prev => ({
-      ...prev,
-      repayments: prev.repayments.map(r => r.id === id ? { ...r, ...updates } : r)
-    }));
+    setData(prev => {
+      const before = prev.repayments.find(r => r.id === id);
+      const newRepayments = prev.repayments.map(r =>
+        r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r
+      );
+      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+
+      // 操作日志
+      let opLog: OpLog | null = null;
+      if (before) {
+        const changes: string[] = [];
+        if (updates.amount !== undefined && updates.amount !== before.amount) {
+          changes.push(`金额 ¥${before.amount} → ¥${updates.amount}`);
+        }
+        if (updates.payee !== undefined && updates.payee !== before.payee) {
+          changes.push(`收款人 ${before.payee} → ${updates.payee}`);
+        }
+        opLog = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'REPAYMENT_EDIT',
+          description: `修改还款记录（${before.customerName}）：${changes.join('，')}`,
+          beforeSnapshot: before,
+          afterSnapshot: updates,
+          createdAt: new Date().toISOString()
+        };
+      }
+
+      return {
+        ...prev,
+        repayments: newRepayments,
+        customers: newCustomers,
+        opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
+      };
+    });
+  };
+
+  const deleteRepayment = (id: string) => {
+    setData(prev => {
+      const target = prev.repayments.find(r => r.id === id);
+      if (!target) return prev;
+      const newRepayments = prev.repayments.filter(r => r.id !== id);
+      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+
+      // 操作日志
+      const opLog: OpLog = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: 'REPAYMENT_DELETE',
+        description: `删除还款记录 ¥${target.amount}，客户：${target.customerName}`,
+        beforeSnapshot: target,
+        createdAt: new Date().toISOString()
+      };
+
+      return {
+        ...prev,
+        repayments: newRepayments,
+        customers: newCustomers,
+        opLogs: [opLog, ...prev.opLogs]
+      };
+    });
   };
 
   const addExpense = (e: Expense) => setData(prev => {
@@ -453,6 +752,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return { ...prev, expenses: [e, ...prev.expenses], batches: updatedBatches };
   });
+
+  const adjustStock = (productId: string, newQty: number, newWeight: number, newInitialQty: number, newInitialWeight: number, reason?: string) => {
+    setData(prev => {
+      const before = prev.products.find(p => p.id === productId);
+      const newProducts = prev.products.map(p => 
+        p.id === productId ? { 
+            ...p, 
+            stockQty: newQty, 
+            stockWeight: newWeight,
+            initialStockQty: newInitialQty,
+            initialStockWeight: newInitialWeight
+        } : p
+      );
+
+      // 库存流水
+      let stockLog: StockLog | null = null;
+      if (before) {
+        const qtyDiff = newQty - before.stockQty;
+        const weightDiff = newWeight - before.stockWeight;
+        if (qtyDiff !== 0 || weightDiff !== 0) {
+          stockLog = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            productId,
+            productName: before.name,
+            type: 'ADJUST' as const,
+            qtyChange: qtyDiff,
+            weightChange: weightDiff,
+            qtyAfter: newQty,
+            weightAfter: newWeight,
+            reason: reason || '库存调整',
+            createdAt: new Date().toISOString()
+          };
+        }
+      }
+
+      // 操作日志
+      let opLog: OpLog | null = null;
+      if (before) {
+        opLog = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: 'STOCK_ADJUST',
+          description: `调整库存（${before.name}）：数量 ${before.stockQty} → ${newQty}，重量 ${before.stockWeight} → ${newWeight}`,
+          beforeSnapshot: { qty: before.stockQty, weight: before.stockWeight },
+          afterSnapshot: { qty: newQty, weight: newWeight },
+          createdAt: new Date().toISOString()
+        };
+      }
+
+      return {
+        ...prev,
+        products: newProducts,
+        stockLogs: stockLog ? [stockLog, ...prev.stockLogs] : prev.stockLogs,
+        opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
+      };
+    });
+  };
 
   const importData = (base64Str: string) => {
     try {
@@ -484,12 +839,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addBatch, updateBatch, closeBatch, deleteBatch,
       addExtraFee, removeExtraFee,
       addOrder, cancelOrder, deleteOrder, updateOrder,
-      addRepayment, updateRepayment, addExpense,
+      addRepayment, updateRepayment, deleteRepayment, addExpense,
       addPayee, updatePayee, deletePayee,
-      addCustomer, 
+      addCustomer, updateCustomer, deleteCustomer,
       importData, exportData,
       addTemplate, deleteTemplate,
-      addPendingOrder, removePendingOrder, getLastPrice, archiveOldData
+      addPendingOrder, removePendingOrder, getLastPrice, archiveOldData,
+      addOpLog
     }}>
       {children}
     </AppContext.Provider>

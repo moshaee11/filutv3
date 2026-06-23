@@ -9,7 +9,8 @@ import { PaymentMethod, OrderStatus, Order, Expense } from '../types';
 import { 
   Download, CreditCard, DollarSign, Wallet, 
   TrendingDown, TrendingUp, PieChart, BarChart3, Calendar, Layers, Truck, X, ArrowRight, ArrowLeft,
-  Table2, ChevronRight, ChevronDown, Filter, ChevronUp, User, Tag, Clock
+  Table2, ChevronRight, ChevronDown, Filter, ChevronUp, User, Tag, Clock, Plus, CheckCircle2,
+  Store, AlertTriangle
 } from 'lucide-react';
 
 // --- Pivot Table Types & Components ---
@@ -422,8 +423,14 @@ const PivotTable: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
 // --- Main BusinessView Component ---
 
-const BusinessView: React.FC = () => {
-  const { data } = useApp();
+interface BusinessViewProps {
+  onGoToReconcile?: () => void;
+}
+
+const EXPENSE_CATEGORIES = ['运费', '人工', '包装', '损耗', '其他'];
+
+const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
+  const { data, addExpense } = useApp();
   
   // Initialize with today's date
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -435,6 +442,9 @@ const BusinessView: React.FC = () => {
 
   const [activeDetail, setActiveDetail] = useState<'revenue' | 'expense' | null>(null);
   const [showPivotTable, setShowPivotTable] = useState(false);
+  const [showAddExpense, setShowAddExpense] = useState(false);
+  const [balanceRange, setBalanceRange] = useState<'today' | 'week' | 'month'>('today');
+  const [expenseForm, setExpenseForm] = useState({ amount: '', type: '', note: '' });
 
   useEffect(() => {
     const today = new Date();
@@ -526,7 +536,6 @@ const BusinessView: React.FC = () => {
             });
         }
     } else {
-        // For a specific channel, "Revenue" is effectively what was received in that channel
         revenue = orders.reduce((sum, o) => {
             if (o.paymentMethod === filterMethod) return sum + (o.totalAmount - o.discount);
             if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
@@ -539,6 +548,13 @@ const BusinessView: React.FC = () => {
     const totalExpense = (filterMethod === 'ALL' || filterMethod === PaymentMethod.CASH) 
         ? expenses.reduce((sum, e) => sum + e.amount, 0) 
         : 0;
+
+    const expenseByCategory: Record<string, number> = {};
+    EXPENSE_CATEGORIES.forEach(cat => expenseByCategory[cat] = 0);
+    expenses.forEach(e => {
+      const cat = EXPENSE_CATEGORIES.includes(e.type) ? e.type : '其他';
+      expenseByCategory[cat] = (expenseByCategory[cat] || 0) + e.amount;
+    });
 
     // Summing up cash flow by channel (Order Received + Repayment Received)
     const sumChannel = (method: PaymentMethod) => {
@@ -562,12 +578,10 @@ const BusinessView: React.FC = () => {
     const alipay = sumChannel(PaymentMethod.ALIPAY);
     const cash = sumChannel(PaymentMethod.CASH);
     
-    // 欠款增加 (只看新单欠款)
     const debtIncrease = (filterMethod === 'ALL' || filterMethod === PaymentMethod.OTHER)
         ? orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0)
         : 0;
     
-    // 实际总入账 = 订单实收 + 还款
     const totalOrderReceived = orders.reduce((sum, o) => {
         if (filterMethod === 'ALL') return sum + o.receivedAmount;
         if (o.paymentMethod === filterMethod) return sum + o.receivedAmount;
@@ -588,10 +602,8 @@ const BusinessView: React.FC = () => {
 
     const totalReceived = totalOrderReceived + totalRepaid;
     
-    // 结余
     const balance = totalReceived - totalExpense;
 
-    // Chart Data
     const productSalesMap = new Map<string, number>();
     orders.forEach(order => {
       order.items.forEach(item => {
@@ -607,8 +619,65 @@ const BusinessView: React.FC = () => {
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 5);
 
-    return { wechat, alipay, cash, revenue, debtIncrease, expenses: totalExpense, balance, chartData, totalRepaid };
+    return { wechat, alipay, cash, revenue, debtIncrease, expenses: totalExpense, balance, chartData, totalRepaid, expenseByCategory };
   }, [filteredData, filterBatchId, data.products]);
+
+  const balanceStats = useMemo(() => {
+    const now = new Date();
+    let startMs: number;
+    
+    if (balanceRange === 'today') {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      startMs = start.getTime();
+    } else if (balanceRange === 'week') {
+      const day = now.getDay() || 7;
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+      startMs = start.getTime();
+    } else {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      startMs = start.getTime();
+    }
+
+    const rangeOrders = data.orders.filter(o => 
+      o.status === OrderStatus.ACTIVE && new Date(o.createdAt).getTime() >= startMs
+    );
+    const rangeRepayments = data.repayments.filter(r => 
+      new Date(r.date).getTime() >= startMs
+    );
+    const rangeExpenses = data.expenses.filter(e => 
+      new Date(e.date).getTime() >= startMs
+    );
+
+    const totalIncome = rangeOrders.reduce((sum, o) => sum + o.receivedAmount, 0) + 
+                        rangeRepayments.reduce((sum, r) => sum + r.amount, 0);
+    const totalExpense = rangeExpenses.reduce((sum, e) => sum + e.amount, 0);
+    const netBalance = totalIncome - totalExpense;
+
+    return { totalIncome, totalExpense, netBalance };
+  }, [data, balanceRange]);
+
+  const handleAddExpense = () => {
+    if (!expenseForm.amount || parseFloat(expenseForm.amount) <= 0) {
+      alert('请输入有效金额');
+      return;
+    }
+    if (!expenseForm.type) {
+      alert('请选择或输入支出类目');
+      return;
+    }
+
+    addExpense({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      amount: parseFloat(expenseForm.amount),
+      type: expenseForm.type,
+      date: new Date().toISOString(),
+      note: expenseForm.note || ''
+    });
+
+    setExpenseForm({ amount: '', type: '', note: '' });
+    setShowAddExpense(false);
+    alert('✅ 支出登记成功！');
+  };
 
   const handleExport = async () => {
     // Export filtered data to CSV
@@ -857,6 +926,80 @@ const BusinessView: React.FC = () => {
         </div>
 
         <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2 text-slate-800">
+              <Wallet size={18} className="text-purple-500" />
+              <h3 className="font-black text-sm">收支结余</h3>
+            </div>
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+              {[
+                { id: 'today', label: '今日' },
+                { id: 'week', label: '本周' },
+                { id: 'month', label: '本月' }
+              ].map(r => (
+                <button
+                  key={r.id}
+                  onClick={() => setBalanceRange(r.id as 'today' | 'week' | 'month')}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${balanceRange === r.id ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-400'}`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-[#ECFDF5] p-4 rounded-2xl text-center border border-emerald-50">
+              <p className="text-[10px] text-emerald-600 font-black mb-1">总收入</p>
+              <p className="text-lg font-black text-emerald-900">¥{balanceStats.totalIncome.toLocaleString()}</p>
+            </div>
+            <div className="bg-[#FFF7ED] p-4 rounded-2xl text-center border border-orange-50">
+              <p className="text-[10px] text-orange-600 font-black mb-1">总支出</p>
+              <p className="text-lg font-black text-orange-900">¥{balanceStats.totalExpense.toLocaleString()}</p>
+            </div>
+            <div className="bg-[#F5F3FF] p-4 rounded-2xl text-center border border-purple-50">
+              <p className="text-[10px] text-purple-600 font-black mb-1">结余</p>
+              <p className={`text-lg font-black ${balanceStats.netBalance >= 0 ? 'text-purple-900' : 'text-red-600'}`}>
+                ¥{balanceStats.netBalance.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
+          <div className="flex items-center gap-2 mb-4 text-slate-800">
+            <Tag size={18} className="text-orange-500" />
+            <h3 className="font-black text-sm">支出分类汇总</h3>
+          </div>
+          <div className="space-y-3">
+            {EXPENSE_CATEGORIES.map(cat => {
+              const amount = stats.expenseByCategory[cat] || 0;
+              const percent = stats.expenses > 0 ? (amount / stats.expenses) * 100 : 0;
+              const colors: Record<string, string> = {
+                '运费': 'bg-blue-400',
+                '人工': 'bg-emerald-400',
+                '包装': 'bg-purple-400',
+                '损耗': 'bg-red-400',
+                '其他': 'bg-gray-400'
+              };
+              return (
+                <div key={cat}>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs font-bold text-slate-600">{cat}</span>
+                    <span className="text-xs font-black text-slate-800">¥{amount.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                    <div 
+                      className={`${colors[cat] || 'bg-gray-400'} h-full rounded-full transition-all`}
+                      style={{ width: `${percent}%` }}
+                    ></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
           <div className="flex items-center gap-2 mb-8 text-slate-800">
             <PieChart size={18} className="text-orange-500" />
             <h3 className="font-black text-sm">热销单品 TOP5 (按金额)</h3>
@@ -902,9 +1045,18 @@ const BusinessView: React.FC = () => {
          <div className="fixed inset-0 z-[200] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
              <header className="bg-white px-4 py-4 border-b flex items-center shrink-0 shadow-sm z-10">
                 <button onClick={() => setActiveDetail(null)} className="p-2 -ml-2 rounded-full active:bg-gray-100"><ArrowLeft size={20}/></button>
-                <h1 className="text-lg font-black flex-1 text-center pr-8">
+                <h1 className="text-lg font-black flex-1 text-center">
                     {activeDetail === 'revenue' ? '营收明细 (实成交)' : '支出明细'}
                 </h1>
+                {activeDetail === 'expense' && (
+                    <button 
+                        onClick={() => setShowAddExpense(true)}
+                        className="p-2 -mr-2 rounded-full bg-emerald-500 text-white active:scale-95 transition-all"
+                    >
+                        <Plus size={20} />
+                    </button>
+                )}
+                {activeDetail === 'revenue' && <div className="w-10"></div>}
             </header>
             <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-32 no-scrollbar">
                 {activeDetail === 'revenue' ? (
@@ -938,19 +1090,111 @@ const BusinessView: React.FC = () => {
                          </div>
                      )) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>
                 ) : (
-                     filteredData.expenses.length > 0 ? filteredData.expenses.map(e => (
-                         <div key={e.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
-                            <div>
-                                <p className="font-black text-gray-800">{e.type}</p>
-                                <p className="text-[10px] text-gray-400 font-bold">{new Date(e.date).toLocaleString()}</p>
+                     filteredData.expenses.length > 0 ? filteredData.expenses.map(e => {
+                        const category = EXPENSE_CATEGORIES.includes(e.type) ? e.type : '其他';
+                        const tagColors: Record<string, string> = {
+                            '运费': 'bg-blue-50 text-blue-600 border-blue-100',
+                            '人工': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+                            '包装': 'bg-purple-50 text-purple-600 border-purple-100',
+                            '损耗': 'bg-red-50 text-red-600 border-red-100',
+                            '其他': 'bg-gray-50 text-gray-600 border-gray-100'
+                        };
+                        return (
+                            <div key={e.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${tagColors[category] || tagColors['其他']}`}>
+                                            {category}
+                                        </span>
+                                    </div>
+                                    <p className="font-black text-gray-800">{e.type}</p>
+                                    <p className="text-[10px] text-gray-400 font-bold">{new Date(e.date).toLocaleString()}</p>
+                                    {e.note && <p className="text-[10px] text-gray-400">备注: {e.note}</p>}
+                                </div>
+                                <p className="font-black text-xl text-orange-500">-¥{e.amount.toLocaleString()}</p>
                             </div>
-                            <p className="font-black text-xl text-orange-500">-¥{e.amount}</p>
-                         </div>
-                     )) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>
+                        );
+                     }) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>
                 )}
             </div>
          </div>
       )}
+
+      {showAddExpense && (
+        <div className="fixed inset-0 z-[300] bg-black/60 backdrop-blur-sm flex items-end">
+           <div className="bg-white w-full rounded-t-[3rem] p-8 space-y-6 animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto no-scrollbar shadow-2xl">
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-black text-gray-800">登记经营支出</h2>
+                <button onClick={() => setShowAddExpense(false)} className="p-3 bg-gray-100 rounded-full text-gray-400 active:bg-gray-200"><X size={24} /></button>
+              </div>
+
+              <div className="space-y-6">
+                 <div className="space-y-3">
+                    <label className="text-xs text-gray-400 font-black uppercase tracking-widest px-2">支出分类</label>
+                    <div className="flex flex-wrap gap-2">
+                      {EXPENSE_CATEGORIES.map(cat => {
+                        const colors: Record<string, string> = {
+                            '运费': 'bg-blue-50 text-blue-600 border-blue-200',
+                            '人工': 'bg-emerald-50 text-emerald-600 border-emerald-200',
+                            '包装': 'bg-purple-50 text-purple-600 border-purple-200',
+                            '损耗': 'bg-red-50 text-red-600 border-red-200',
+                            '其他': 'bg-gray-50 text-gray-600 border-gray-200'
+                        };
+                        const isActive = expenseForm.type === cat;
+                        return (
+                            <button
+                                key={cat}
+                                onClick={() => setExpenseForm({...expenseForm, type: cat})}
+                                className={`px-4 py-2.5 rounded-xl text-sm font-black border-2 transition-all ${isActive ? colors[cat] + ' shadow-sm' : 'bg-white text-gray-400 border-gray-100'}`}
+                            >
+                                {cat}
+                            </button>
+                        );
+                      })}
+                    </div>
+                 </div>
+
+                 <div className="space-y-2">
+                  <label className="text-xs text-gray-400 font-black uppercase tracking-widest px-2">支出类目</label>
+                  <input 
+                    value={expenseForm.type} 
+                    onChange={e=>setExpenseForm({...expenseForm, type: e.target.value})} 
+                    placeholder="例如：运费、人工费"
+                    className="w-full bg-gray-50 p-5 rounded-2xl font-black outline-none shadow-inner border-2 border-transparent focus:border-emerald-100 focus:bg-white transition-all" 
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-xs text-gray-400 font-black uppercase tracking-widest px-2">金额 (元)</label>
+                  <input 
+                    type="number" 
+                    value={expenseForm.amount} 
+                    onChange={e=>setExpenseForm({...expenseForm, amount: e.target.value})} 
+                    placeholder="0.00" 
+                    className="w-full bg-gray-50 p-5 rounded-2xl font-black text-4xl text-emerald-600 outline-none shadow-inner border-2 border-transparent focus:border-emerald-100 focus:bg-white transition-all" 
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs text-gray-400 font-black uppercase tracking-widest px-2">备注</label>
+                  <input 
+                    value={expenseForm.note} 
+                    onChange={e=>setExpenseForm({...expenseForm, note: e.target.value})} 
+                    placeholder="选填"
+                    className="w-full bg-gray-50 p-4 rounded-2xl font-bold outline-none shadow-inner border-2 border-transparent focus:border-emerald-100 focus:bg-white transition-all" 
+                  />
+                </div>
+             </div>
+
+             <button 
+                onClick={handleAddExpense} 
+                className="w-full bg-emerald-500 text-white py-6 rounded-3xl font-black text-xl shadow-xl shadow-emerald-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+             >
+                <CheckCircle2 size={24} /> 确认入账
+             </button>
+          </div>
+       </div>
+    )}
     </div>
   );
 };

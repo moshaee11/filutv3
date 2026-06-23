@@ -9,7 +9,15 @@ import {
   Plus, PlusCircle, CheckCircle2, UserCog, FileText, Check
 } from 'lucide-react';
 import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
-import { preciseCalc, downloadJSON } from '../utils';
+import { 
+  preciseCalc, downloadJSON, 
+  getPurchaseRanking, getCustomerDebtStats, getDormantCustomers,
+  getLowStockProducts, getSellOutForecast, getUnsellableProducts,
+  getDebtRiskLevel, getDebtRiskSummary, DEBT_RISK_CONFIG,
+  type CustomerPurchaseStat, type CustomerDebtStat, type DormantCustomer,
+  type LowStockProduct, type SellOutForecast, type UnsellableProduct,
+  type DebtRiskLevel, type DebtRiskSummary,
+} from '../utils';
 
 // Helper: Filter Props Interface
 interface BatchSelectorProps {
@@ -254,9 +262,14 @@ const ProductFormFields: React.FC<{
   </div>
 );
 
-const ManageView: React.FC = () => {
-  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees' | 'template_list';
-  const [subView, setSubView] = useState<ViewState>('main');
+const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: string) => void }> = ({ initialSubView, onSubViewChange }) => {
+  type ViewState = 'main' | 'history' | 'reconcile' | 'customers' | 'inventory' | 'adjust_stock' | 'batch_detail' | 'order_detail' | 'customer_detail' | 'stock_logs' | 'op_logs' | 'add_batch' | 'edit_batch' | 'add_product' | 'edit_product' | 'payees' | 'template_list' | 'customer_analysis' | 'stock_alert';
+  const [subView, setSubViewState] = useState<ViewState>((initialSubView as ViewState) || 'main');
+
+  const setSubView = (v: ViewState) => {
+    setSubViewState(v);
+    onSubViewChange?.(v);
+  };
   
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -270,9 +283,15 @@ const ManageView: React.FC = () => {
   const [orderSearch, setOrderSearch] = useState('');
   const [custSearch, setCustSearch] = useState('');
   const [invSearch, setInvSearch] = useState('');
+  const [stockLogSearch, setStockLogSearch] = useState('');
+  const [opLogTypeFilter, setOpLogTypeFilter] = useState<string>('ALL');
+  const [expandedOpLogId, setExpandedOpLogId] = useState<string | null>(null);
+  const [showCustomerEditModal, setShowCustomerEditModal] = useState(false);
+  const [customerEditForm, setCustomerEditForm] = useState({ name: '', phone: '', wechat: '', address: '', note: '' });
   const [showFeeModal, setShowFeeModal] = useState(false);
   const [feeForm, setFeeForm] = useState({ name: '运费', amount: '' });
   const [newPayeeName, setNewPayeeName] = useState('');
+  const [debtRiskFilter, setDebtRiskFilter] = useState<DebtRiskLevel | 'ALL'>('ALL');
 
   // Payee Edit State
   const [editingPayee, setEditingPayee] = useState<string | null>(null);
@@ -313,11 +332,46 @@ const ManageView: React.FC = () => {
     actualInitialWeight: ''
   });
 
-  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, removeExtraFee, deleteOrder, updateOrder, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate } = useApp();
+  const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, addOrder, addRepayment, deleteCustomer, updateCustomer, removeExtraFee, deleteOrder, updateOrder, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate, exportData, importData, addExpense } = useApp();
 
   const selectedBatch = useMemo(() => data.batches.find(b => b.id === selectedBatchId), [data.batches, selectedBatchId]);
   const selectedOrder = useMemo(() => data.orders.find(o => o.id === selectedOrderId), [data.orders, selectedOrderId]);
   const selectedProduct = useMemo(() => data.products.find(p => p.id === selectedProductId), [data.products, selectedProductId]);
+  const selectedCustomer = useMemo(() => data.customers.find(c => c.id === selectedCustId), [data.customers, selectedCustId]);
+
+  const filteredStockLogs = useMemo(() => {
+    return data.stockLogs.filter(log => 
+      log.productName.includes(stockLogSearch)
+    ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [data.stockLogs, stockLogSearch]);
+
+  const filteredOpLogs = useMemo(() => {
+    return data.opLogs.filter(log => 
+      opLogTypeFilter === 'ALL' || log.type === opLogTypeFilter
+    ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [data.opLogs, opLogTypeFilter]);
+
+  const customerOrders = useMemo(() => {
+    if (!selectedCustId) return [];
+    return data.orders
+      .filter(o => o.customerId === selectedCustId && o.status === OrderStatus.ACTIVE)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [data.orders, selectedCustId]);
+
+  const customerRepayments = useMemo(() => {
+    if (!selectedCustId) return [];
+    return data.repayments
+      .filter(r => r.customerId === selectedCustId)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [data.repayments, selectedCustId]);
+
+  const customerStats = useMemo(() => {
+    const orders = customerOrders;
+    const totalAmount = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
+    const orderCount = orders.length;
+    const lastOrderDate = orders.length > 0 ? orders[0].createdAt : null;
+    return { totalAmount, orderCount, lastOrderDate };
+  }, [customerOrders]);
 
   const activeBatches = useMemo(() => data.batches.filter(b => b && !b.isClosed).sort((a, b) => new Date(b.inboundDate).getTime() - new Date(a.inboundDate).getTime()), [data.batches]);
   
@@ -445,6 +499,33 @@ const ManageView: React.FC = () => {
       setSubView('add_product');
   };
 
+  const handleOpenCustomerEdit = () => {
+    if (!selectedCustomer) return;
+    setCustomerEditForm({
+      name: selectedCustomer.name,
+      phone: selectedCustomer.phone,
+      wechat: selectedCustomer.wechat || '',
+      address: selectedCustomer.address || '',
+      note: selectedCustomer.note || ''
+    });
+    setShowCustomerEditModal(true);
+  };
+
+  const handleSaveCustomerEdit = () => {
+    if (!selectedCustId || !customerEditForm.name.trim()) {
+      alert('请输入客户姓名');
+      return;
+    }
+    updateCustomer(selectedCustId, {
+      name: customerEditForm.name.trim(),
+      phone: customerEditForm.phone.trim(),
+      wechat: customerEditForm.wechat.trim(),
+      address: customerEditForm.address.trim(),
+      note: customerEditForm.note.trim()
+    });
+    setShowCustomerEditModal(false);
+  };
+
   // --- MERGED HISTORY LIST (Orders + Repayments) ---
   const combinedHistory = useMemo(() => {
     const orders: any[] = data.orders.map(o => ({ ...o, type: 'order' }));
@@ -520,21 +601,19 @@ const ManageView: React.FC = () => {
                     <p className="text-xs text-gray-400 font-bold mt-1">配置开单与收款时的可选人员</p>
                </div>
            </div>
+           <div onClick={() => setSubView('op_logs')} className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all col-span-2 flex items-center gap-4">
+               <div className="w-12 h-12 bg-gray-50 text-gray-600 rounded-2xl flex items-center justify-center shrink-0"><ClipboardCheck size={24} /></div>
+               <div>
+                    <p className="font-black text-gray-800">操作日志</p>
+                    <p className="text-xs text-gray-400 font-bold mt-1">查看系统所有操作记录</p>
+               </div>
+           </div>
            
            {/* Data Backup & Restore */}
            <div className="col-span-2 grid grid-cols-2 gap-4">
-               <div onClick={async () => {
-                   const backup = await data.exportData();
-                   // exportData now returns base64 string, we need to save it
-                   // But wait, exportData in store.tsx returns string.
-                   // We should update store.tsx to use the new downloadJSON utility or handle it here.
-                   // Let's check store.tsx exportData implementation.
-                   // It returns base64 string.
-                   // We should use downloadJSON directly with the data object instead of base64 string for the new utility.
-                   // Let's modify store.tsx to expose a method that triggers download/share directly.
-                   // For now, let's assume we can access the data object directly from `data` prop.
+               <div onClick={() => {
                    const timestamp = new Date().toISOString().split('T')[0];
-                   await downloadJSON(data, `FruitPro_Backup_${timestamp}.json`);
+                   downloadJSON(data, `FruitPro_Backup_${timestamp}.json`);
                }} className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 active:scale-95 transition-all flex items-center gap-3">
                    <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center shrink-0"><Share2 size={20} /></div>
                    <div>
@@ -1172,6 +1251,33 @@ const ManageView: React.FC = () => {
             searchProps={{ value: invSearch, onChange: setInvSearch, placeholder: '搜索库存商品...' }}
             batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
         >
+            <div className="grid grid-cols-2 gap-3 mb-2">
+                <button
+                    onClick={() => setSubView('stock_logs')}
+                    className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100 flex items-center gap-3 active:scale-[0.98] transition-all"
+                >
+                    <div className="w-10 h-10 bg-blue-50 text-blue-500 rounded-xl flex items-center justify-center">
+                        <ClipboardEdit size={20} />
+                    </div>
+                    <div className="flex-1 text-left">
+                        <p className="font-black text-gray-800 text-sm">库存流水</p>
+                        <p className="text-[10px] text-gray-400 font-bold">出入库记录</p>
+                    </div>
+                </button>
+                <button
+                    onClick={() => setSubView('stock_alert')}
+                    className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-orange-100 flex items-center gap-3 active:scale-[0.98] transition-all"
+                >
+                    <div className="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center">
+                        <AlertTriangle size={20} />
+                    </div>
+                    <div className="flex-1 text-left">
+                        <p className="font-black text-gray-800 text-sm">库存预警</p>
+                        <p className="text-[10px] text-gray-400 font-bold">低库存/售罄预测</p>
+                    </div>
+                </button>
+            </div>
+
             {filteredInventory.length > 0 ? filteredInventory.map(p => {
                if (!p) return null;
                const isLowStock = p.stockQty <= (p.lowStockThreshold || 10);
@@ -1431,28 +1537,15 @@ const ManageView: React.FC = () => {
 
   // 10. Customers View
   if (subView === 'customers') {
-      const debtCustomers = data.customers.filter(c => c && c.totalDebt > 0 && !c.isGuest).sort((a,b) => b.totalDebt - a.totalDebt);
-      const totalReceivable = debtCustomers.reduce((sum, c) => sum + c.totalDebt, 0);
+      const debtStats = getCustomerDebtStats(data.customers, data.orders, data.repayments);
+      const riskSummary = getDebtRiskSummary(debtStats);
+      const totalReceivable = riskSummary.totalAmount;
 
-      // Simple Classification Logic
-      const classifyCustomer = (customer: any) => {
-          // Find last order date
-          const customerOrders = data.orders.filter(o => o.customerId === customer.id && o.status === OrderStatus.ACTIVE);
-          if (customerOrders.length === 0) return { label: '新欠款', color: 'text-gray-500', bg: 'bg-gray-100' };
-          
-          const lastOrderDate = new Date(Math.max(...customerOrders.map(o => new Date(o.createdAt).getTime())));
-          const daysSinceLastOrder = (new Date().getTime() - lastOrderDate.getTime()) / (1000 * 3600 * 24);
-
-          if (daysSinceLastOrder > 30) {
-              return { label: '呆账预警 (超30天未拿货)', color: 'text-red-600', bg: 'bg-red-100' };
-          } else if (daysSinceLastOrder > 15) {
-              return { label: '需催款 (超15天未拿货)', color: 'text-orange-600', bg: 'bg-orange-100' };
-          } else if (customer.totalDebt > 10000) {
-              return { label: '大额欠款', color: 'text-purple-600', bg: 'bg-purple-100' };
-          } else {
-              return { label: '活跃客户', color: 'text-emerald-600', bg: 'bg-emerald-100' };
-          }
-      };
+      const filteredDebtStats = debtStats.filter(s => {
+          const matchSearch = s.customerName.includes(custSearch);
+          const matchRisk = debtRiskFilter === 'ALL' || getDebtRiskLevel(s.debtAgeDays).level === debtRiskFilter;
+          return matchSearch && matchRisk;
+      });
 
       // Calculate debt by payee
       const debtByPayee: Record<string, number> = {};
@@ -1464,12 +1557,19 @@ const ManageView: React.FC = () => {
               debtByPayee[o.payee] = (debtByPayee[o.payee] || 0) + debt;
           }
       });
-      // Subtract repayments
       data.repayments.forEach(r => {
           if (r.payee && debtByPayee[r.payee] !== undefined) {
               debtByPayee[r.payee] -= r.amount;
           }
       });
+
+      const riskLevels: { key: DebtRiskLevel | 'ALL'; label: string }[] = [
+          { key: 'ALL', label: '全部' },
+          { key: 'CRITICAL', label: DEBT_RISK_CONFIG.CRITICAL.label },
+          { key: 'HIGH', label: DEBT_RISK_CONFIG.HIGH.label },
+          { key: 'MEDIUM', label: DEBT_RISK_CONFIG.MEDIUM.label },
+          { key: 'LOW', label: DEBT_RISK_CONFIG.LOW.label },
+      ];
 
       return (
          <SubViewShell 
@@ -1480,6 +1580,53 @@ const ManageView: React.FC = () => {
              <div className="bg-red-50 p-6 rounded-[2rem] mb-4 flex justify-between items-center border border-red-100">
                  <div><p className="text-xs text-red-400 font-black uppercase tracking-widest">总应收款</p><p className="text-3xl font-black text-red-500">¥{totalReceivable.toLocaleString()}</p></div>
                  <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-red-500 shadow-sm"><Users size={24}/></div>
+             </div>
+
+             {/* 风险等级汇总 */}
+             <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100 mb-4">
+                 <div className="flex justify-between items-center mb-3">
+                     <p className="text-xs font-black text-gray-400 uppercase tracking-widest">风险等级汇总</p>
+                     <button 
+                        onClick={() => setSubView('customer_analysis')}
+                        className="flex items-center gap-1 text-blue-500 text-xs font-bold"
+                     >
+                         <BarChart3 size={14} /> 客户分析
+                     </button>
+                 </div>
+                 <div className="grid grid-cols-4 gap-2">
+                     {(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as DebtRiskLevel[]).map(level => {
+                         const info = DEBT_RISK_CONFIG[level];
+                         const stat = riskSummary.byLevel[level];
+                         return (
+                             <div 
+                                key={level} 
+                                onClick={() => setDebtRiskFilter(level)}
+                                className={`p-3 rounded-xl text-center cursor-pointer transition-all ${debtRiskFilter === level ? 'ring-2 ring-offset-1 ring-blue-400' : ''} ${info.bg}`}
+                             >
+                                 <p className={`text-xs font-black ${info.color}`}>{info.label}</p>
+                                 <p className={`text-lg font-black ${info.color} mt-1`}>{stat.count}</p>
+                                 <p className="text-[10px] text-gray-500 font-bold">¥{stat.amount.toLocaleString()}</p>
+                             </div>
+                         );
+                     })}
+                 </div>
+             </div>
+
+             {/* 风险筛选标签 */}
+             <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2 mb-2">
+                 {riskLevels.map(({ key, label }) => (
+                     <button
+                        key={key}
+                        onClick={() => setDebtRiskFilter(key)}
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-black transition-all shrink-0 border ${
+                            debtRiskFilter === key 
+                                ? 'bg-blue-500 text-white border-blue-500 shadow-md' 
+                                : 'bg-white text-gray-500 border-gray-200'
+                        }`}
+                     >
+                         {label}
+                     </button>
+                 ))}
              </div>
 
              {/* 经手人欠款汇总 */}
@@ -1500,40 +1647,45 @@ const ManageView: React.FC = () => {
              
              <div className="space-y-3">
                  <p className="px-2 text-xs font-black text-gray-400 uppercase tracking-widest">客户明细</p>
-                 {debtCustomers.filter(c => c.name.includes(custSearch)).map(c => {
-                     const classification = classifyCustomer(c);
+                 {filteredDebtStats.length > 0 ? filteredDebtStats.map(stat => {
+                     const riskInfo = getDebtRiskLevel(stat.debtAgeDays);
+                     const customer = data.customers.find(c => c.id === stat.customerId);
                      
-                     // 计算该客户欠每个经手人多少钱
                      const customerDebtByPayee: Record<string, number> = {};
-                     data.orders.filter(o => o.customerId === c.id && o.status === OrderStatus.ACTIVE && o.totalAmount > o.receivedAmount + o.discount).forEach(o => {
+                     data.orders.filter(o => o.customerId === stat.customerId && o.status === OrderStatus.ACTIVE && o.totalAmount > o.receivedAmount + o.discount).forEach(o => {
                          const debt = o.totalAmount - o.receivedAmount - o.discount;
                          if (o.payee) customerDebtByPayee[o.payee] = (customerDebtByPayee[o.payee] || 0) + debt;
                      });
-                     data.repayments.filter(r => r.customerId === c.id).forEach(r => {
+                     data.repayments.filter(r => r.customerId === stat.customerId).forEach(r => {
                          if (r.payee && customerDebtByPayee[r.payee] !== undefined) {
                              customerDebtByPayee[r.payee] -= r.amount;
                          }
                      });
 
                      return (
-                     <div key={c.id} className="bg-white p-5 rounded-[1.5rem] flex flex-col gap-3 shadow-sm border border-gray-50">
+                     <div 
+                        key={stat.customerId} 
+                        onClick={() => { setSelectedCustId(stat.customerId); setSubView('customer_detail'); }}
+                        className="bg-white p-5 rounded-[1.5rem] flex flex-col gap-3 shadow-sm border border-gray-50 active:scale-[0.98] transition-all cursor-pointer"
+                     >
                          <div className="flex justify-between items-center">
                              <div>
                                  <div className="flex items-center gap-2">
-                                     <p className="font-black text-gray-800 text-lg">{c.name}</p>
-                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${classification.bg} ${classification.color}`}>
-                                         {classification.label}
+                                     <p className="font-black text-gray-800 text-lg">{stat.customerName}</p>
+                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${riskInfo.bg} ${riskInfo.color}`}>
+                                         {riskInfo.label}
                                      </span>
                                  </div>
-                                 <p className="text-xs text-gray-400 font-bold mt-1">电话: {c.phone || '未记录'}</p>
+                                 <p className="text-xs text-gray-400 font-bold mt-1">
+                                     电话: {customer?.phone || '未记录'} · 账龄 {stat.debtAgeDays} 天
+                                 </p>
                              </div>
                              <div className="text-right">
-                                 <p className="text-xl font-black text-red-500">¥{c.totalDebt.toLocaleString()}</p>
+                                 <p className="text-xl font-black text-red-500">¥{stat.totalDebt.toLocaleString()}</p>
                                  <p className="text-[10px] text-gray-400 font-bold">总欠款</p>
                              </div>
                          </div>
                          
-                         {/* 展示该客户的经手人欠款明细 */}
                          {Object.entries(customerDebtByPayee).filter(([_, amt]) => amt > 0).length > 0 && (
                              <div className="bg-gray-50 rounded-xl p-3 flex flex-wrap gap-3">
                                  {Object.entries(customerDebtByPayee).filter(([_, amt]) => amt > 0).map(([payee, amt]) => (
@@ -1546,8 +1698,11 @@ const ManageView: React.FC = () => {
                              </div>
                          )}
                      </div>
-                 )})}
-                 {debtCustomers.length === 0 && <div className="text-center py-10 text-gray-400 font-bold">没有欠款客户，经营状况良好！</div>}
+                 )}) : (
+                     <div className="text-center py-10 text-gray-400 font-bold">
+                         {debtStats.length === 0 ? '没有欠款客户，经营状况良好！' : '没有符合筛选条件的客户'}
+                     </div>
+                 )}
              </div>
          </SubViewShell>
       );
@@ -1662,6 +1817,751 @@ const ManageView: React.FC = () => {
                   </div>
               </div>
           </div>
+      );
+  }
+
+  if (subView === 'customer_detail' && selectedCustomer) {
+      const stats = customerStats;
+      const orders = customerOrders;
+      const repayments = customerRepayments;
+
+      return (
+          <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
+              <header className="bg-white px-4 py-4 border-b flex items-center shrink-0 shadow-sm z-10">
+                  <button onClick={() => setSubView('customers')} className="p-2 -ml-2 active:scale-90">
+                      <ArrowLeft />
+                  </button>
+                  <h1 className="text-lg font-black flex-1 text-center pr-8">{selectedCustomer.name}</h1>
+                  <button 
+                      onClick={handleOpenCustomerEdit}
+                      className="absolute right-4 p-2 text-emerald-600 bg-emerald-50 rounded-xl active:scale-95"
+                  >
+                      <Edit2 size={18} />
+                  </button>
+              </header>
+
+              <div className="flex-1 p-4 pb-32 overflow-y-auto no-scrollbar space-y-4">
+                  <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 space-y-3">
+                      <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-600">
+                              <UserCheck size={24} />
+                          </div>
+                          <div className="flex-1">
+                              <h2 className="font-black text-gray-800 text-lg">{selectedCustomer.name}</h2>
+                              <p className="text-xs text-gray-400 font-bold">
+                                  {selectedCustomer.phone ? `电话: ${selectedCustomer.phone}` : '暂无电话'}
+                              </p>
+                          </div>
+                      </div>
+                      {selectedCustomer.wechat && (
+                          <div className="flex items-center gap-2 text-sm">
+                              <span className="text-gray-400 font-bold">微信:</span>
+                              <span className="font-bold text-gray-700">{selectedCustomer.wechat}</span>
+                          </div>
+                      )}
+                      {selectedCustomer.address && (
+                          <div className="flex items-start gap-2 text-sm">
+                              <span className="text-gray-400 font-bold shrink-0">地址:</span>
+                              <span className="font-bold text-gray-700">{selectedCustomer.address}</span>
+                          </div>
+                      )}
+                      {selectedCustomer.note && (
+                          <div className="flex items-start gap-2 text-sm pt-2 border-t border-gray-50">
+                              <span className="text-gray-400 font-bold shrink-0">备注:</span>
+                              <span className="font-bold text-gray-600">{selectedCustomer.note}</span>
+                          </div>
+                      )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-black uppercase">累计采购</p>
+                          <p className="text-xl font-black text-gray-800 mt-1">¥{stats.totalAmount.toLocaleString()}</p>
+                          <p className="text-[10px] text-gray-400 font-bold mt-0.5">{stats.orderCount} 笔订单</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-black uppercase">采购次数</p>
+                          <p className="text-xl font-black text-blue-600 mt-1">{stats.orderCount}</p>
+                          <p className="text-[10px] text-gray-400 font-bold mt-0.5">笔</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-red-100">
+                          <p className="text-[10px] text-red-400 font-black uppercase">当前欠款</p>
+                          <p className="text-xl font-black text-red-500 mt-1">¥{selectedCustomer.totalDebt.toLocaleString()}</p>
+                          <p className="text-[10px] text-gray-400 font-bold mt-0.5">待回收</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-100">
+                          <p className="text-[10px] text-gray-400 font-black uppercase">最近采购</p>
+                          <p className="text-sm font-black text-gray-800 mt-1">
+                              {stats.lastOrderDate ? new Date(stats.lastOrderDate).toLocaleDateString() : '暂无记录'}
+                          </p>
+                          <p className="text-[10px] text-gray-400 font-bold mt-0.5">
+                              {stats.lastOrderDate ? new Date(stats.lastOrderDate).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}
+                          </p>
+                      </div>
+                  </div>
+
+                  <div className="space-y-3">
+                      <div className="flex justify-between items-center px-2">
+                          <h3 className="font-black text-gray-800 text-sm">历史订单</h3>
+                          <span className="text-xs text-gray-400 font-bold">{orders.length} 笔</span>
+                      </div>
+                      {orders.length > 0 ? orders.map(order => {
+                          const debtAmount = order.totalAmount - order.discount - order.receivedAmount;
+                          const isPaid = debtAmount <= 0.01;
+                          return (
+                              <div
+                                  key={order.id}
+                                  onClick={() => { setSelectedOrderId(order.id); setSubView('order_detail'); }}
+                                  className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-50 active:scale-[0.98] transition-all"
+                              >
+                                  <div className="flex justify-between items-start mb-2">
+                                      <div>
+                                          <p className="font-black text-gray-800">{order.orderNo}</p>
+                                          <p className="text-[10px] text-gray-400 font-mono">
+                                              {new Date(order.createdAt).toLocaleString()}
+                                          </p>
+                                      </div>
+                                      <div className="text-right">
+                                          <p className="font-black text-gray-800">¥{(order.totalAmount - order.discount).toLocaleString()}</p>
+                                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isPaid ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                                              {isPaid ? '已结清' : `欠 ¥${debtAmount.toLocaleString()}`}
+                                          </span>
+                                      </div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                      {order.items.slice(0, 3).map((item, idx) => (
+                                          <span key={idx} className="text-[10px] bg-gray-50 text-gray-500 px-2 py-0.5 rounded font-bold">
+                                              {item.productName}
+                                          </span>
+                                      ))}
+                                      {order.items.length > 3 && (
+                                          <span className="text-[10px] text-gray-400 font-bold">+{order.items.length - 3}</span>
+                                      )}
+                                  </div>
+                              </div>
+                          );
+                      }) : (
+                          <div className="bg-white p-8 rounded-[1.5rem] text-center">
+                              <Receipt size={32} className="mx-auto text-gray-200 mb-2" />
+                              <p className="text-gray-400 font-bold text-sm">暂无订单记录</p>
+                          </div>
+                      )}
+                  </div>
+
+                  {repayments.length > 0 && (
+                      <div className="space-y-3">
+                          <div className="flex justify-between items-center px-2">
+                              <h3 className="font-black text-gray-800 text-sm">还款记录</h3>
+                              <span className="text-xs text-gray-400 font-bold">{repayments.length} 笔</span>
+                          </div>
+                          {repayments.map(repayment => (
+                              <div key={repayment.id} className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-emerald-50 flex justify-between items-center">
+                                  <div>
+                                      <p className="font-black text-emerald-600">+¥{repayment.amount.toLocaleString()}</p>
+                                      <p className="text-[10px] text-gray-400 font-mono">
+                                          {new Date(repayment.date).toLocaleString()}
+                                      </p>
+                                      {repayment.payee && (
+                                          <p className="text-[10px] text-gray-400 font-bold mt-0.5">
+                                              收款人: {repayment.payee}
+                                          </p>
+                                      )}
+                                  </div>
+                                  <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-500">
+                                      <Wallet size={18} />
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+              </div>
+
+              <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t shadow-lg z-20 flex gap-3">
+                  <button
+                      onClick={() => {
+                          if (typeof window !== 'undefined' && (window as any).navigateToBilling) {
+                              (window as any).navigateToBilling(selectedCustomer.id);
+                          } else {
+                              alert('请到开单页面新增订单');
+                          }
+                      }}
+                      className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-black text-base shadow-lg shadow-emerald-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                      <Plus size={18} /> 新增订单
+                  </button>
+                  <button
+                      onClick={() => {
+                          alert('快速还款功能需在收款页面操作');
+                      }}
+                      className="flex-1 py-4 bg-orange-500 text-white rounded-2xl font-black text-base shadow-lg shadow-orange-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                      <Wallet size={18} /> 快速还款
+                  </button>
+              </div>
+
+              {showCustomerEditModal && (
+                  <div className="fixed inset-0 z-[500] bg-white flex flex-col animate-in slide-in-from-bottom">
+                      <header className="px-4 py-4 border-b flex items-center shrink-0">
+                          <button onClick={() => setShowCustomerEditModal(false)} className="p-2 active:scale-90">
+                              <X size={28}/>
+                          </button>
+                          <h1 className="text-xl font-black flex-1 text-center pr-10">编辑客户信息</h1>
+                      </header>
+                      <div className="p-6 space-y-5 flex-1 overflow-y-auto">
+                          <div>
+                              <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">客户姓名</label>
+                              <input
+                                  value={customerEditForm.name}
+                                  onChange={e => setCustomerEditForm({...customerEditForm, name: e.target.value})}
+                                  placeholder="请输入客户姓名"
+                                  className="w-full mt-1 bg-gray-100 p-4 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all"
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">联系电话</label>
+                              <input
+                                  value={customerEditForm.phone}
+                                  onChange={e => setCustomerEditForm({...customerEditForm, phone: e.target.value})}
+                                  placeholder="请输入电话号码"
+                                  className="w-full mt-1 bg-gray-100 p-4 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all"
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">微信号</label>
+                              <input
+                                  value={customerEditForm.wechat}
+                                  onChange={e => setCustomerEditForm({...customerEditForm, wechat: e.target.value})}
+                                  placeholder="请输入微信号"
+                                  className="w-full mt-1 bg-gray-100 p-4 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all"
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">地址</label>
+                              <input
+                                  value={customerEditForm.address}
+                                  onChange={e => setCustomerEditForm({...customerEditForm, address: e.target.value})}
+                                  placeholder="请输入地址"
+                                  className="w-full mt-1 bg-gray-100 p-4 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all"
+                              />
+                          </div>
+                          <div>
+                              <label className="text-xs font-bold text-blue-500 uppercase tracking-wider px-1">备注</label>
+                              <textarea
+                                  value={customerEditForm.note}
+                                  onChange={e => setCustomerEditForm({...customerEditForm, note: e.target.value})}
+                                  placeholder="备注信息"
+                                  rows={3}
+                                  className="w-full mt-1 bg-gray-100 p-4 rounded-2xl font-bold text-lg text-gray-800 border-2 border-transparent focus:border-blue-400 focus:bg-white outline-none transition-all resize-none"
+                              />
+                          </div>
+                      </div>
+                      <div className="p-4 shrink-0 flex gap-3">
+                          <button
+                              onClick={() => {
+                                  if (confirm(`确认删除客户「${selectedCustomer.name}」吗？`)) {
+                                      deleteCustomer(selectedCustomer.id);
+                                      setShowCustomerEditModal(false);
+                                      setSubView('customers');
+                                  }
+                              }}
+                              className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl font-black flex items-center justify-center active:scale-95 transition-all"
+                          >
+                              <Trash2 size={20} />
+                          </button>
+                          <button
+                              onClick={handleSaveCustomerEdit}
+                              className="flex-1 bg-[#10b981] text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-emerald-300 active:scale-95 transition-all"
+                          >
+                              保存修改
+                          </button>
+                      </div>
+                  </div>
+              )}
+          </div>
+      );
+  }
+
+  if (subView === 'stock_logs') {
+      const stockLogTypeMap: Record<string, { label: string; color: string; bg: string }> = {
+          INBOUND: { label: '入库', color: 'text-emerald-600', bg: 'bg-emerald-100' },
+          OUTBOUND: { label: '出库', color: 'text-orange-600', bg: 'bg-orange-100' },
+          RETURN: { label: '回退', color: 'text-blue-600', bg: 'bg-blue-100' },
+          ADJUST: { label: '调整', color: 'text-purple-600', bg: 'bg-purple-100' },
+          CANCEL_RETURN: { label: '作废回退', color: 'text-gray-600', bg: 'bg-gray-100' },
+      };
+
+      return (
+          <SubViewShell
+              title="库存流水"
+              onBack={() => setSubView('inventory')}
+              searchProps={{ value: stockLogSearch, onChange: setStockLogSearch, placeholder: '搜索商品名称...' }}
+          >
+              {filteredStockLogs.length > 0 ? filteredStockLogs.map(log => {
+                  const typeInfo = stockLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100' };
+                  const isPositive = log.qtyChange > 0;
+                  return (
+                      <div key={log.id} className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-50">
+                          <div className="flex justify-between items-start mb-3">
+                              <div className="flex items-center gap-2">
+                                  <h3 className="font-black text-gray-800">{log.productName}</h3>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
+                                      {typeInfo.label}
+                                  </span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 font-mono text-right">
+                                  {new Date(log.createdAt).toLocaleString()}
+                              </p>
+                          </div>
+                          <div className="grid grid-cols-3 gap-3 text-center">
+                              <div className="bg-gray-50 p-3 rounded-xl">
+                                  <p className="text-[10px] text-gray-400 font-bold">数量变化</p>
+                                  <p className={`font-black text-sm mt-1 ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
+                                      {isPositive ? '+' : ''}{log.qtyChange.toLocaleString()}
+                                  </p>
+                              </div>
+                              <div className="bg-gray-50 p-3 rounded-xl">
+                                  <p className="text-[10px] text-gray-400 font-bold">重量变化</p>
+                                  <p className={`font-black text-sm mt-1 ${log.weightChange > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                      {log.weightChange > 0 ? '+' : ''}{log.weightChange.toFixed(1)}斤
+                                  </p>
+                              </div>
+                              <div className="bg-gray-50 p-3 rounded-xl">
+                                  <p className="text-[10px] text-gray-400 font-bold">结存数量</p>
+                                  <p className="font-black text-sm mt-1 text-gray-800">{log.qtyAfter.toLocaleString()}</p>
+                              </div>
+                          </div>
+                          {log.reason && (
+                              <div className="mt-3 pt-3 border-t border-gray-50">
+                                  <p className="text-xs text-gray-500 font-bold">
+                                      <span className="text-gray-400">原因:</span> {log.reason}
+                                  </p>
+                              </div>
+                          )}
+                          {log.operator && (
+                              <p className="text-[10px] text-gray-400 font-bold mt-1">
+                                  操作人: {log.operator}
+                              </p>
+                          )}
+                      </div>
+                  );
+              }) : (
+                  <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                      <ClipboardEdit size={48} strokeWidth={1} className="opacity-20"/>
+                      <p className="font-bold text-sm">暂无库存流水记录</p>
+                      <p className="text-xs text-gray-300">开单或调整库存后会在这里显示</p>
+                  </div>
+              )}
+          </SubViewShell>
+      );
+  }
+
+  if (subView === 'op_logs') {
+      const opLogTypeMap: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+          ORDER_DELETE: { label: '订单删除', color: 'text-red-600', bg: 'bg-red-100', icon: '🗑️' },
+          ORDER_CANCEL: { label: '订单作废', color: 'text-orange-600', bg: 'bg-orange-100', icon: '🚫' },
+          ORDER_EDIT: { label: '订单修改', color: 'text-blue-600', bg: 'bg-blue-100', icon: '✏️' },
+          STOCK_ADJUST: { label: '库存调整', color: 'text-purple-600', bg: 'bg-purple-100', icon: '📦' },
+          PRICE_CHANGE: { label: '价格变动', color: 'text-emerald-600', bg: 'bg-emerald-100', icon: '💰' },
+          DEBT_CHANGE: { label: '欠款变动', color: 'text-red-500', bg: 'bg-red-50', icon: '💳' },
+          REPAYMENT_DELETE: { label: '还款删除', color: 'text-red-600', bg: 'bg-red-100', icon: '🗑️' },
+          REPAYMENT_EDIT: { label: '还款修改', color: 'text-blue-600', bg: 'bg-blue-100', icon: '✏️' },
+          CUSTOMER_EDIT: { label: '客户修改', color: 'text-emerald-600', bg: 'bg-emerald-100', icon: '👤' },
+          PRODUCT_EDIT: { label: '商品修改', color: 'text-orange-600', bg: 'bg-orange-100', icon: '🍎' },
+      };
+
+      const opLogTypes = Object.entries(opLogTypeMap);
+
+      return (
+          <div className="fixed inset-0 z-[100] bg-[#F4F6F9] flex flex-col animate-in slide-in-from-right">
+              <header className="bg-white px-4 py-4 border-b flex items-center shrink-0 shadow-sm z-10">
+                  <button onClick={() => setSubView('main')} className="p-2 -ml-2 active:scale-90">
+                      <ArrowLeft />
+                  </button>
+                  <h1 className="text-lg font-black flex-1 text-center pr-8">操作日志</h1>
+              </header>
+
+              <div className="bg-white border-b shadow-sm z-10 px-4 py-3">
+                  <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                      <button
+                          onClick={() => setOpLogTypeFilter('ALL')}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all shrink-0 border ${opLogTypeFilter === 'ALL' ? 'bg-gray-800 border-gray-800 text-white shadow-md' : 'bg-white border-gray-200 text-gray-500'}`}
+                      >
+                          <Layers size={12} /> 全部
+                      </button>
+                      {opLogTypes.map(([type, info]) => (
+                          <button
+                              key={type}
+                              onClick={() => setOpLogTypeFilter(type)}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all shrink-0 border ${opLogTypeFilter === type ? `${info.bg} ${info.color} border-current shadow-md` : 'bg-white border-gray-200 text-gray-500'}`}
+                          >
+                              {info.icon} {info.label}
+                          </button>
+                      ))}
+                  </div>
+              </div>
+
+              <div className="flex-1 p-4 pb-32 overflow-y-auto no-scrollbar space-y-3">
+                  {filteredOpLogs.length > 0 ? filteredOpLogs.map(log => {
+                      const typeInfo = opLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100', icon: '📝' };
+                      const isExpanded = expandedOpLogId === log.id;
+                      const hasSnapshot = log.beforeSnapshot || log.afterSnapshot;
+
+                      return (
+                          <div key={log.id} className="bg-white rounded-[1.5rem] shadow-sm border border-gray-50 overflow-hidden">
+                              <div
+                                  onClick={() => hasSnapshot && setExpandedOpLogId(isExpanded ? null : log.id)}
+                                  className={`p-4 ${hasSnapshot ? 'cursor-pointer active:bg-gray-50' : ''}`}
+                              >
+                                  <div className="flex justify-between items-start mb-2">
+                                      <div className="flex items-center gap-2">
+                                          <span className="text-lg">{typeInfo.icon}</span>
+                                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
+                                              {typeInfo.label}
+                                          </span>
+                                      </div>
+                                      <p className="text-[10px] text-gray-400 font-mono text-right">
+                                          {new Date(log.createdAt).toLocaleString()}
+                                      </p>
+                                  </div>
+                                  <p className="text-sm font-bold text-gray-800 leading-relaxed">{log.description}</p>
+                                  {log.operator && (
+                                      <p className="text-[10px] text-gray-400 font-bold mt-1">
+                                          操作人: {log.operator}
+                                      </p>
+                                  )}
+                                  {hasSnapshot && (
+                                      <div className="flex items-center gap-1 mt-2 text-xs text-gray-400 font-bold">
+                                          {isExpanded ? '收起详情' : '点击查看详情'}
+                                          <ChevronRight size={14} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                                      </div>
+                                  )}
+                              </div>
+
+                              {isExpanded && hasSnapshot && (
+                                  <div className="bg-gray-50 p-4 border-t border-gray-100 space-y-3 animate-in fade-in">
+                                      {log.beforeSnapshot && (
+                                          <div>
+                                              <p className="text-[10px] font-black text-gray-400 uppercase mb-2">修改前</p>
+                                              <div className="bg-white p-3 rounded-xl border border-gray-100">
+                                                  <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap break-all">
+                                                      {JSON.stringify(log.beforeSnapshot, null, 2)}
+                                                  </pre>
+                                              </div>
+                                          </div>
+                                      )}
+                                      {log.afterSnapshot && (
+                                          <div>
+                                              <p className="text-[10px] font-black text-emerald-600 uppercase mb-2">修改后</p>
+                                              <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                                                  <pre className="text-xs text-emerald-700 font-mono whitespace-pre-wrap break-all">
+                                                      {JSON.stringify(log.afterSnapshot, null, 2)}
+                                                  </pre>
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
+                              )}
+                          </div>
+                      );
+                  }) : (
+                      <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                          <ClipboardCheck size={48} strokeWidth={1} className="opacity-20"/>
+                          <p className="font-bold text-sm">暂无操作日志</p>
+                          <p className="text-xs text-gray-300">系统操作记录会在这里显示</p>
+                      </div>
+                  )}
+              </div>
+          </div>
+      );
+  }
+
+  // 11. Customer Analysis View
+  if (subView === 'customer_analysis') {
+      const purchaseRanking = getPurchaseRanking(data.customers, data.orders);
+      const debtRanking = getCustomerDebtStats(data.customers, data.orders, data.repayments);
+      const dormantCustomers = getDormantCustomers(data.customers, data.orders, 30);
+
+      return (
+         <SubViewShell 
+            title="客户分析" 
+            onBack={() => setSubView('customers')}
+         >
+             {/* 采购排行榜 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-emerald-50 text-emerald-500 rounded-xl flex items-center justify-center">
+                         <TrendingUp size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">采购排行榜</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">按累计采购金额降序</p>
+                     </div>
+                 </div>
+                 {purchaseRanking.length > 0 ? (
+                     <div className="space-y-2">
+                         {purchaseRanking.slice(0, 10).map((customer, idx) => (
+                             <div key={customer.customerId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                                 <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${
+                                     idx === 0 ? 'bg-yellow-400 text-white' :
+                                     idx === 1 ? 'bg-gray-300 text-white' :
+                                     idx === 2 ? 'bg-orange-400 text-white' :
+                                     'bg-gray-200 text-gray-500'
+                                 }`}>
+                                     {idx + 1}
+                                 </div>
+                                 <div className="flex-1 min-w-0">
+                                     <p className="font-black text-gray-800 text-sm truncate">{customer.customerName}</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">
+                                         {customer.orderCount} 笔 · {customer.lastOrderDate ? new Date(customer.lastOrderDate).toLocaleDateString() : '无记录'}
+                                     </p>
+                                 </div>
+                                 <div className="text-right shrink-0">
+                                     <p className="font-black text-emerald-600 text-sm">¥{customer.totalAmount.toLocaleString()}</p>
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">暂无采购数据</div>
+                 )}
+             </div>
+
+             {/* 欠款排行榜 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center">
+                         <Wallet size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">欠款排行榜</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">按当前欠款金额降序</p>
+                     </div>
+                 </div>
+                 {debtRanking.length > 0 ? (
+                     <div className="space-y-2">
+                         {debtRanking.slice(0, 10).map((customer, idx) => {
+                             const riskInfo = getDebtRiskLevel(customer.debtAgeDays);
+                             return (
+                                 <div key={customer.customerId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                                     <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${
+                                         idx === 0 ? 'bg-red-500 text-white' :
+                                         idx === 1 ? 'bg-orange-500 text-white' :
+                                         idx === 2 ? 'bg-yellow-500 text-white' :
+                                         'bg-gray-200 text-gray-500'
+                                     }`}>
+                                         {idx + 1}
+                                     </div>
+                                     <div className="flex-1 min-w-0">
+                                         <div className="flex items-center gap-2">
+                                             <p className="font-black text-gray-800 text-sm truncate">{customer.customerName}</p>
+                                             <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${riskInfo.bg} ${riskInfo.color}`}>
+                                                 {riskInfo.label}
+                                             </span>
+                                         </div>
+                                         <p className="text-[10px] text-gray-400 font-bold">
+                                             账龄 {customer.debtAgeDays} 天
+                                         </p>
+                                     </div>
+                                     <div className="text-right shrink-0">
+                                         <p className="font-black text-red-500 text-sm">¥{customer.totalDebt.toLocaleString()}</p>
+                                     </div>
+                                 </div>
+                             );
+                         })}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">暂无欠款客户</div>
+                 )}
+             </div>
+
+             {/* 沉睡客户 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-purple-50 text-purple-500 rounded-xl flex items-center justify-center">
+                         <Users size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">沉睡客户</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">超过30天未采购</p>
+                     </div>
+                 </div>
+                 {dormantCustomers.length > 0 ? (
+                     <div className="space-y-2">
+                         {dormantCustomers.slice(0, 10).map(customer => (
+                             <div key={customer.customerId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                                 <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-purple-500 shrink-0">
+                                     <UserCheck size={18} />
+                                 </div>
+                                 <div className="flex-1 min-w-0">
+                                     <p className="font-black text-gray-800 text-sm truncate">{customer.customerName}</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">
+                                         最近: {customer.lastOrderDate ? new Date(customer.lastOrderDate).toLocaleDateString() : '从未采购'}
+                                     </p>
+                                 </div>
+                                 <div className="text-right shrink-0">
+                                     <p className="font-black text-purple-500 text-sm">{customer.dormantDays} 天</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">未采购</p>
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">暂无沉睡客户</div>
+                 )}
+             </div>
+         </SubViewShell>
+      );
+  }
+
+  // 12. Stock Alert View
+  if (subView === 'stock_alert') {
+      const lowStockProducts = getLowStockProducts(data.products);
+      const sellOutForecast = getSellOutForecast(data.products, data.orders, 7);
+      const unsellableProducts = getUnsellableProducts(data.products, data.orders, 30);
+
+      const getSellOutLevelStyle = (level: SellOutForecast['level']) => {
+          switch (level) {
+              case 'URGENT':
+                  return { bg: 'bg-red-100', text: 'text-red-600', label: '紧急' };
+              case 'WARNING':
+                  return { bg: 'bg-orange-100', text: 'text-orange-600', label: '预警' };
+              case 'SAFE':
+                  return { bg: 'bg-emerald-100', text: 'text-emerald-600', label: '安全' };
+              default:
+                  return { bg: 'bg-gray-100', text: 'text-gray-500', label: '暂无数据' };
+          }
+      };
+
+      return (
+         <SubViewShell 
+            title="库存预警" 
+            onBack={() => setSubView('inventory')}
+         >
+             {/* 低库存预警 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center">
+                         <AlertTriangle size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">低库存预警</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">当前库存低于预警阈值</p>
+                     </div>
+                 </div>
+                 {lowStockProducts.length > 0 ? (
+                     <div className="space-y-2">
+                         {lowStockProducts.map(product => (
+                             <div key={product.productId} className="flex items-center gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+                                 <div className="flex-1 min-w-0">
+                                     <p className="font-black text-gray-800 text-sm truncate">{product.productName}</p>
+                                     <p className="text-[10px] text-gray-500 font-bold">
+                                         当前: {product.currentStock.toFixed(product.pricingMode === PricingMode.WEIGHT ? 1 : 0)} {product.unit} 
+                                         <span className="text-red-400 mx-1">/</span>
+                                         阈值: {product.threshold} {product.unit}
+                                     </p>
+                                 </div>
+                                 <div className="text-right shrink-0">
+                                     <p className="font-black text-red-500 text-sm">-{product.gap.toFixed(product.pricingMode === PricingMode.WEIGHT ? 1 : 0)}</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">缺口</p>
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">
+                         <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400" />
+                         库存状况良好，无低库存商品
+                     </div>
+                 )}
+             </div>
+
+             {/* 预估售罄天数 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-orange-50 text-orange-500 rounded-xl flex items-center justify-center">
+                         <BarChart3 size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">预估售罄天数</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">基于近7天日均销量</p>
+                     </div>
+                 </div>
+                 {sellOutForecast.length > 0 ? (
+                     <div className="space-y-2 max-h-[400px] overflow-y-auto no-scrollbar">
+                         {sellOutForecast.filter(f => f.level !== 'NO_DATA').slice(0, 15).map(forecast => {
+                             const style = getSellOutLevelStyle(forecast.level);
+                             return (
+                                 <div key={forecast.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                                     <div className={`w-2 h-2 rounded-full shrink-0 ${
+                                         forecast.level === 'URGENT' ? 'bg-red-500' :
+                                         forecast.level === 'WARNING' ? 'bg-orange-500' :
+                                         'bg-emerald-500'
+                                     }`} />
+                                     <div className="flex-1 min-w-0">
+                                         <p className="font-black text-gray-800 text-sm truncate">{forecast.productName}</p>
+                                         <p className="text-[10px] text-gray-400 font-bold">
+                                             日均: {forecast.dailyAvg.toFixed(forecast.pricingMode === PricingMode.WEIGHT ? 1 : 2)} {forecast.unit}
+                                         </p>
+                                     </div>
+                                     <div className="text-right shrink-0">
+                                         <p className={`font-black text-sm ${style.text}`}>
+                                             {forecast.sellOutDays !== null ? `${forecast.sellOutDays} 天` : '暂无数据'}
+                                         </p>
+                                         <p className="text-[10px] text-gray-400 font-bold">{style.label}</p>
+                                     </div>
+                                 </div>
+                             );
+                         })}
+                         {sellOutForecast.filter(f => f.level !== 'NO_DATA').length === 0 && (
+                             <div className="text-center py-4 text-gray-400 text-sm font-bold">
+                                 暂无销量数据
+                             </div>
+                         )}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">暂无商品数据</div>
+                 )}
+             </div>
+
+             {/* 滞销商品 */}
+             <div className="bg-white p-5 rounded-[1.5rem] shadow-sm border border-gray-100">
+                 <div className="flex items-center gap-2 mb-4">
+                     <div className="w-10 h-10 bg-gray-100 text-gray-500 rounded-xl flex items-center justify-center">
+                         <Package size={20} />
+                     </div>
+                     <div>
+                         <h3 className="font-black text-gray-800">滞销商品</h3>
+                         <p className="text-[10px] text-gray-400 font-bold">近30天销量为0</p>
+                     </div>
+                 </div>
+                 {unsellableProducts.length > 0 ? (
+                     <div className="space-y-2">
+                         {unsellableProducts.slice(0, 10).map(product => (
+                             <div key={product.productId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                                 <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center text-gray-500 shrink-0">
+                                     <Package size={18} />
+                                 </div>
+                                 <div className="flex-1 min-w-0">
+                                     <p className="font-black text-gray-800 text-sm truncate">{product.productName}</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">
+                                         库存: {product.currentStock.toFixed(product.pricingMode === PricingMode.WEIGHT ? 1 : 0)} {product.unit}
+                                     </p>
+                                 </div>
+                                 <div className="text-right shrink-0">
+                                     <p className="font-black text-gray-500 text-sm">{product.unsoldDays > 999 ? '999+' : product.unsoldDays} 天</p>
+                                     <p className="text-[10px] text-gray-400 font-bold">未动销</p>
+                                 </div>
+                             </div>
+                         ))}
+                     </div>
+                 ) : (
+                     <div className="text-center py-6 text-gray-400 text-sm font-bold">
+                         <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400" />
+                         暂无滞销商品
+                     </div>
+                 )}
+             </div>
+         </SubViewShell>
       );
   }
 

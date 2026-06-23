@@ -1,10 +1,12 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
+import { getCustomerDebtAge } from '../utils';
 import { 
   Wallet, Send, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, X, Plus, CheckCircle2,
-  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight, Copy, Share, User, Banknote
+  Truck, Store, AlertTriangle, ShieldAlert, ClipboardPaste, ArrowRight, Copy, Share, User, Banknote,
+  Clock, TrendingUp, BarChart3, AlertOctagon, DollarSign
 } from 'lucide-react';
 import { OrderStatus, PaymentMethod, Customer } from '../types';
 
@@ -59,6 +61,86 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
   const totalDebtAmount = useMemo(() => 
     data.customers.reduce((sum, c) => sum + (c.totalDebt || 0), 0)
   , [data.customers]);
+
+  const overdueCustomers = useMemo(() => {
+    const result: { customer: Customer; debtAge: number }[] = [];
+    data.customers.forEach(c => {
+      if (c.isGuest || c.totalDebt <= 0) return;
+      const debtAge = getCustomerDebtAge(c.id, data.orders);
+      if (debtAge > 15) {
+        result.push({ customer: c, debtAge });
+      }
+    });
+    result.sort((a, b) => b.debtAge - a.debtAge);
+    return result;
+  }, [data.customers, data.orders]);
+
+  const totalOverdueAmount = useMemo(() => 
+    overdueCustomers.reduce((sum, item) => sum + item.customer.totalDebt, 0)
+  , [overdueCustomers]);
+
+  const dashboardStats = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).getTime();
+
+    const todayOrders = data.orders.filter(o => 
+      o.status === OrderStatus.ACTIVE && new Date(o.createdAt).getTime() >= startOfToday
+    );
+    const todayRepayments = data.repayments.filter(r => 
+      new Date(r.date).getTime() >= startOfToday
+    );
+
+    const todaySales = todayOrders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
+    const todayRepayment = todayRepayments.reduce((sum, r) => sum + r.amount, 0);
+    const todayNewDebt = todayOrders.reduce((sum, o) => 
+      sum + Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount), 0
+    );
+    const todayDebtIncrease = todayNewDebt - todayRepayment;
+
+    const lowStockCount = data.products.filter(p => {
+      const threshold = p.lowStockThreshold ?? 20;
+      return p.stockQty < threshold;
+    }).length;
+
+    const productSalesMap = new Map<string, { name: string; qty: number; amount: number }>();
+    const last7DaysOrders = data.orders.filter(o => 
+      o.status === OrderStatus.ACTIVE && new Date(o.createdAt).getTime() >= sevenDaysAgo
+    );
+    last7DaysOrders.forEach(order => {
+      order.items.forEach(item => {
+        const existing = productSalesMap.get(item.productId);
+        if (existing) {
+          existing.qty += item.qty;
+          existing.amount += item.subtotal;
+        } else {
+          productSalesMap.set(item.productId, {
+            name: item.productName,
+            qty: item.qty,
+            amount: item.subtotal
+          });
+        }
+      });
+    });
+
+    const topProducts = Array.from(productSalesMap.values())
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 5);
+
+    const topDebtCustomers = data.customers
+      .filter(c => !c.isGuest && c.totalDebt > 0)
+      .sort((a, b) => b.totalDebt - a.totalDebt)
+      .slice(0, 5);
+
+    return {
+      todaySales,
+      todayRepayment,
+      todayDebtIncrease,
+      lowStockCount,
+      topProducts,
+      topDebtCustomers
+    };
+  }, [data]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -204,27 +286,117 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
       </div>
 
       <div className="p-4 space-y-4">
-        <div className="flex justify-between items-center px-2"><h3 className="font-black text-lg text-gray-800 tracking-tight">今日经营动态</h3></div>
+        <div className="flex justify-between items-center px-2">
+          <h3 className="font-black text-lg text-gray-800 tracking-tight">经营看板</h3>
+        </div>
+        
         <div className="grid grid-cols-2 gap-3">
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日营收 (实成交)</p><p className="text-2xl font-black text-gray-900">¥{stats.orderAmount.toLocaleString()}</p></div>
-           
-           {/* 今日实收卡片优化：显示回款构成 */}
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-1 relative overflow-hidden">
-                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">今日实收 (总入账)</p>
-                <p className="text-2xl font-black text-emerald-500">¥{stats.totalReceived.toLocaleString()}</p>
-                {stats.repaymentReceived > 0 && (
-                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600/70 bg-emerald-50 px-2 py-0.5 rounded-md w-fit">
-                        <ArrowDownCircle size={10} />
-                        含回款 ¥{stats.repaymentReceived.toLocaleString()}
-                    </div>
-                )}
+           <div className="bg-white p-5 rounded-2xl border border-gray-100 space-y-1">
+             <div className="flex items-center gap-1 text-[10px] text-gray-400 font-black uppercase tracking-widest">
+               <DollarSign size={12} />
+               <span>今日销售额</span>
+             </div>
+             <p className="text-xl font-black text-gray-900">¥{dashboardStats.todaySales.toLocaleString()}</p>
            </div>
            
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">新增挂账</p><p className="text-2xl font-black text-red-500">¥{stats.debtAmount.toLocaleString()}</p></div>
-           <div className="bg-white p-6 rounded-[2rem] border border-gray-100 space-y-2"><p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">在售车辆</p><p className="text-2xl font-black text-blue-500">{stats.activeBatches} 台</p></div>
+           <div className="bg-white p-5 rounded-2xl border border-gray-100 space-y-1">
+             <div className="flex items-center gap-1 text-[10px] text-gray-400 font-black uppercase tracking-widest">
+               <ArrowDownCircle size={12} />
+               <span>今日回款</span>
+             </div>
+             <p className="text-xl font-black text-emerald-500">¥{dashboardStats.todayRepayment.toLocaleString()}</p>
+           </div>
+           
+           <div className="bg-white p-5 rounded-2xl border border-gray-100 space-y-1">
+             <div className="flex items-center gap-1 text-[10px] text-gray-400 font-black uppercase tracking-widest">
+               <TrendingUp size={12} />
+               <span>今日欠款增加</span>
+             </div>
+             <p className={`text-xl font-black ${dashboardStats.todayDebtIncrease >= 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+               {dashboardStats.todayDebtIncrease >= 0 ? '+' : ''}¥{Math.abs(dashboardStats.todayDebtIncrease).toLocaleString()}
+             </p>
+           </div>
+           
+           <div className="bg-white p-5 rounded-2xl border border-gray-100 space-y-1">
+             <div className="flex items-center gap-1 text-[10px] text-gray-400 font-black uppercase tracking-widest">
+               <AlertTriangle size={12} />
+               <span>库存预警</span>
+             </div>
+             <p className="text-xl font-black text-orange-500">{dashboardStats.lowStockCount.toLocaleString()} 个</p>
+           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-white p-5 rounded-2xl border border-gray-100">
+            <div className="flex items-center gap-2 mb-3">
+              <BarChart3 size={16} className="text-emerald-500" />
+              <h4 className="font-black text-sm text-gray-800">热销商品 TOP5</h4>
+            </div>
+            <div className="space-y-2">
+              {dashboardStats.topProducts.length > 0 ? (
+                dashboardStats.topProducts.map((product, index) => {
+                  const rankColors = [
+                    'bg-amber-100 text-amber-600',
+                    'bg-gray-100 text-gray-600',
+                    'bg-orange-100 text-orange-600',
+                    'bg-gray-50 text-gray-400',
+                    'bg-gray-50 text-gray-400'
+                  ];
+                  const rankColor = rankColors[index] || rankColors[3];
+                  return (
+                    <div key={product.name} className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${rankColor}`}>
+                          {index + 1}
+                        </span>
+                        <span className="font-bold text-gray-700 truncate max-w-[80px]">{product.name}</span>
+                      </div>
+                      <span className="font-black text-gray-500">{product.qty.toLocaleString()}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-4 text-gray-300 text-xs font-bold">暂无数据</div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-gray-100">
+            <div className="flex items-center gap-2 mb-3">
+              <Wallet size={16} className="text-red-500" />
+              <h4 className="font-black text-sm text-gray-800">欠款排行 TOP5</h4>
+            </div>
+            <div className="space-y-2">
+              {dashboardStats.topDebtCustomers.length > 0 ? (
+                dashboardStats.topDebtCustomers.map((customer, index) => {
+                  const rankColors = [
+                    'bg-red-100 text-red-600',
+                    'bg-orange-100 text-orange-600',
+                    'bg-amber-100 text-amber-600',
+                    'bg-gray-50 text-gray-400',
+                    'bg-gray-50 text-gray-400'
+                  ];
+                  const rankColor = rankColors[index] || rankColors[3];
+                  return (
+                    <div key={customer.id} className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${rankColor}`}>
+                          {index + 1}
+                        </span>
+                        <span className="font-bold text-gray-700 truncate max-w-[60px]">{customer.name}</span>
+                      </div>
+                      <span className="font-black text-red-500">¥{customer.totalDebt.toLocaleString()}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-4 text-gray-300 text-xs font-bold">暂无数据</div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
-      {activeModal && <QuickModal type={activeModal} onClose={() => setActiveModal(null)} />}
+      {activeModal && <QuickModal type={activeModal} onClose={() => setActiveModal(null)} onGoToReconcile={onGoToReconcile} />}
 
       {/* 首页直接同步数据弹窗 */}
       {showSyncModal && (
@@ -284,7 +456,11 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
 };
 
 // QuickModal 组件
-const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void }> = ({ type, onClose }) => {
+const QuickModal: React.FC<{ 
+  type: 'repayment' | 'expense', 
+  onClose: () => void,
+  onGoToReconcile?: () => void
+}> = ({ type, onClose, onGoToReconcile }) => {
   const { data, addRepayment, addExpense, addCustomer } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');
   const [form, setForm] = useState({ amount: '', type: '' });
@@ -310,6 +486,23 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
   
   const activeBatches = useMemo(() => data.batches.filter(b => !b.isClosed), [data.batches]);
 
+  const overdueCustomers = useMemo(() => {
+    const result: { customer: Customer; debtAge: number }[] = [];
+    data.customers.forEach(c => {
+      if (c.isGuest || c.totalDebt <= 0) return;
+      const debtAge = getCustomerDebtAge(c.id, data.orders);
+      if (debtAge > 15) {
+        result.push({ customer: c, debtAge });
+      }
+    });
+    result.sort((a, b) => b.debtAge - a.debtAge);
+    return result;
+  }, [data.customers, data.orders]);
+
+  const totalOverdueAmount = useMemo(() => 
+    overdueCustomers.reduce((sum, item) => sum + item.customer.totalDebt, 0)
+  , [overdueCustomers]);
+
   React.useEffect(() => {
     if (expenseScope === 'BATCH' && activeBatches.length > 0 && !selectedBatchId) {
       setSelectedBatchId(activeBatches[0].id);
@@ -325,9 +518,17 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
         const formattedDate = lastDateObj 
             ? `${lastDateObj.getFullYear()}/${(lastDateObj.getMonth()+1).toString().padStart(2,'0')}/${lastDateObj.getDate().toString().padStart(2,'0')}` 
             : '暂无交易';
-        return { ...c, lastDate: formattedDate };
+        const debtAge = c.totalDebt > 0 ? getCustomerDebtAge(c.id, data.orders) : 0;
+        return { ...c, lastDate: formattedDate, debtAge };
       })
-      .sort((a, b) => b.totalDebt - a.totalDebt);
+      .sort((a, b) => {
+        if (a.totalDebt > 0 && b.totalDebt > 0) {
+          return b.debtAge - a.debtAge;
+        }
+        if (a.totalDebt > 0) return -1;
+        if (b.totalDebt > 0) return 1;
+        return b.totalDebt - a.totalDebt;
+      });
   }, [data.customers, data.orders, customerSearch]);
 
   const handleOpenRepay = (customer: Customer) => {
@@ -537,11 +738,46 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
            </button>
         </div>
 
+        {overdueCustomers.length > 0 && customerSearch === '' && (
+          <div className="px-4 pb-2">
+            <div 
+              onClick={onGoToReconcile}
+              className="bg-gradient-to-r from-red-500 to-orange-500 rounded-2xl p-4 text-white shadow-lg active:scale-[0.98] transition-all cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertOctagon size={20} />
+                  <div>
+                    <p className="text-sm font-black">超期待回款提醒</p>
+                    <p className="text-xs opacity-90">超15天未回款客户 {overdueCustomers.length} 人</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-black">¥{totalOverdueAmount.toLocaleString()}</p>
+                  <p className="text-xs opacity-80">总超期金额</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end mt-2 text-xs font-bold opacity-90">
+                查看详情 <ArrowRight size={14} className="ml-1" />
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3 no-scrollbar pb-32">
-           {customerList.map(c => (
+           {customerList.map(c => {
+              const isOverdue = c.debtAge > 15;
+              return (
              <div key={c.id} className="bg-white p-5 rounded-[1.2rem] flex justify-between items-center shadow-sm border border-gray-50 active:scale-[0.99] transition-all">
                 <div className="space-y-1.5">
-                   <p className="text-xl font-black text-[#111827]">{c.name}</p>
+                   <div className="flex items-center gap-2">
+                     <p className="text-xl font-black text-[#111827]">{c.name}</p>
+                     {c.totalDebt > 0 && (
+                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${isOverdue ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
+                         账龄 {c.debtAge}天
+                       </span>
+                     )}
+                   </div>
                    <p className="text-xs text-[#9ca3af] font-bold">最近交易: {c.lastDate}</p>
                 </div>
                 <div className="flex items-center gap-6">
@@ -557,7 +793,8 @@ const QuickModal: React.FC<{ type: 'repayment' | 'expense', onClose: () => void 
                    </button>
                 </div>
              </div>
-           ))}
+              );
+           })}
            {customerList.length === 0 && (
                 <div className="text-center py-20 text-gray-400 font-bold">暂无相关客户</div>
            )}

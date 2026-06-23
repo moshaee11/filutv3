@@ -98,8 +98,10 @@ export interface Repayment {
   customerName: string;
   amount: number;
   date: string;
-  payee: string; // 收款人
-  paymentMethod?: PaymentMethod; // 新增：收款方式
+  createdAt?: string;
+  updatedAt?: string;
+  payee: string;
+  paymentMethod?: PaymentMethod;
   mixedPayments?: { method: PaymentMethod, amount: number }[];
   note?: string;
 }
@@ -108,8 +110,12 @@ export interface Customer {
   id: string;
   name: string;
   phone: string;
+  wechat?: string;
+  address?: string;
+  note?: string;
   totalDebt: number;
   isGuest: boolean;
+  createdAt?: string;
 }
 
 export interface Expense {
@@ -119,6 +125,32 @@ export interface Expense {
   date: string;
   note: string;
   batchId?: string;
+}
+
+export interface StockLog {
+  id: string;
+  productId: string;
+  productName: string;
+  type: 'INBOUND' | 'OUTBOUND' | 'RETURN' | 'ADJUST' | 'CANCEL_RETURN';
+  qtyChange: number;
+  weightChange: number;
+  qtyAfter: number;
+  weightAfter: number;
+  reason?: string;
+  relatedOrderId?: string;
+  relatedBatchId?: string;
+  operator?: string;
+  createdAt: string;
+}
+
+export interface OpLog {
+  id: string;
+  type: 'ORDER_DELETE' | 'ORDER_CANCEL' | 'ORDER_EDIT' | 'STOCK_ADJUST' | 'PRICE_CHANGE' | 'DEBT_CHANGE' | 'REPAYMENT_DELETE' | 'REPAYMENT_EDIT' | 'CUSTOMER_EDIT' | 'PRODUCT_EDIT';
+  description: string;
+  beforeSnapshot?: any;
+  afterSnapshot?: any;
+  operator?: string;
+  createdAt: string;
 }
 
 export interface PendingOrder {
@@ -137,6 +169,8 @@ export interface AppData {
   customers: Customer[];
   payees: string[];
   expenses: Expense[];
-  templates: ProductTemplate[]; // 新增：模板列表
+  templates: ProductTemplate[];
   pendingOrders: PendingOrder[];
+  stockLogs: StockLog[];
+  opLogs: OpLog[];
 }
