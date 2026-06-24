@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../store';
-import { getCustomerDebtAge } from '../utils';
+import { getCustomerDebtAge, preciseCalc } from '../utils';
 import { 
   Wallet, Send, Share2, Receipt, ArrowUpCircle, 
   ArrowDownCircle, X, Plus, CheckCircle2,
@@ -461,7 +461,7 @@ const QuickModal: React.FC<{
   onClose: () => void,
   onGoToReconcile?: () => void
 }> = ({ type, onClose, onGoToReconcile }) => {
-  const { data, addRepayment, addExpense, addCustomer } = useApp();
+  const { data, addRepayment, addExpense, addCustomer, updateOrder } = useApp();
   const [customerSearch, setCustomerSearch] = useState('');
   const [form, setForm] = useState({ amount: '', type: '' });
   const [showAddCustomer, setShowAddCustomer] = useState(false);
@@ -469,6 +469,9 @@ const QuickModal: React.FC<{
   
   // Repayment Form State
   const [repayingCustomer, setRepayingCustomer] = useState<Customer | null>(null);
+  const [showingDebtOrders, setShowingDebtOrders] = useState<Customer | null>(null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [isSelectedOrderRepay, setIsSelectedOrderRepay] = useState(false);
   const [repayForm, setRepayForm] = useState({
       amount: '',
       method: PaymentMethod.WECHAT,
@@ -531,10 +534,63 @@ const QuickModal: React.FC<{
       });
   }, [data.customers, data.orders, customerSearch]);
 
-  const handleOpenRepay = (customer: Customer) => {
-      setRepayingCustomer(customer);
+  const debtOrders = useMemo(() => {
+    if (!showingDebtOrders) return [];
+    return data.orders
+      .filter(o => 
+        o.customerId === showingDebtOrders.id && 
+        o.status === OrderStatus.ACTIVE &&
+        (o.totalAmount - (o.discount || 0) - o.receivedAmount) > 0
+      )
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [showingDebtOrders, data.orders]);
+
+  const selectedDebtAmount = useMemo(() => {
+    return debtOrders
+      .filter(o => selectedOrderIds.includes(o.id))
+      .reduce((sum, o) => sum + (o.totalAmount - (o.discount || 0) - o.receivedAmount), 0);
+  }, [debtOrders, selectedOrderIds]);
+
+  const handleOpenDebtOrders = (customer: Customer) => {
+      setShowingDebtOrders(customer);
+      setSelectedOrderIds([]);
+  };
+
+  const handleToggleOrder = (orderId: string) => {
+      setSelectedOrderIds(prev => 
+        prev.includes(orderId) 
+          ? prev.filter(id => id !== orderId)
+          : [...prev, orderId]
+      );
+  };
+
+  const handleFullRepayment = () => {
+      if (!showingDebtOrders) return;
+      setIsSelectedOrderRepay(false);
+      setRepayingCustomer(showingDebtOrders);
       setRepayForm({
-          amount: customer.totalDebt.toString(),
+          amount: showingDebtOrders.totalDebt.toString(),
+          method: PaymentMethod.WECHAT,
+          mixedPayments: {
+            [PaymentMethod.WECHAT]: '',
+            [PaymentMethod.ALIPAY]: '',
+            [PaymentMethod.CASH]: ''
+          } as Record<PaymentMethod, string>,
+          payee: data.payees[0] || '',
+          note: ''
+      });
+  };
+
+  const handleSelectedRepayment = () => {
+      if (selectedOrderIds.length === 0) {
+          alert('请至少选择一个订单');
+          return;
+      }
+      if (!showingDebtOrders) return;
+      setIsSelectedOrderRepay(true);
+      setRepayingCustomer(showingDebtOrders);
+      setRepayForm({
+          amount: selectedDebtAmount.toString(),
           method: PaymentMethod.WECHAT,
           mixedPayments: {
             [PaymentMethod.WECHAT]: '',
@@ -561,24 +617,70 @@ const QuickModal: React.FC<{
       if (isNaN(amount) || amount <= 0) return alert('请输入有效还款金额');
       if (!repayForm.payee) return alert('请选择收款人');
 
-      addRepayment({ 
-          id: Date.now().toString(), 
-          customerId: repayingCustomer.id, 
-          customerName: repayingCustomer.name, 
-          amount: amount, 
-          date: new Date().toISOString(), 
-          payee: repayForm.payee,
-          paymentMethod: repayForm.method,
-          mixedPayments: repayForm.method === PaymentMethod.MIXED ? [
-            { method: PaymentMethod.WECHAT, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) },
-            { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
-            { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0) }
-          ].filter(m => m.amount > 0) : undefined,
-          note: repayForm.note 
-      });
+      const paymentMethod = repayForm.method;
+      const mixedPayments = repayForm.method === PaymentMethod.MIXED ? [
+        { method: PaymentMethod.WECHAT, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.WECHAT]) || 0) },
+        { method: PaymentMethod.ALIPAY, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.ALIPAY]) || 0) },
+        { method: PaymentMethod.CASH, amount: Math.floor(parseFloat(repayForm.mixedPayments[PaymentMethod.CASH]) || 0) }
+      ].filter(m => m.amount > 0) : undefined;
+
+      if (isSelectedOrderRepay && selectedOrderIds.length > 0) {
+          const selectedOrders = debtOrders.filter(o => selectedOrderIds.includes(o.id));
+          const totalSelectedDebt = selectedOrders.reduce(
+              (sum, o) => sum + (o.totalAmount - (o.discount || 0) - o.receivedAmount), 0
+          );
+          
+          if (amount > totalSelectedDebt) {
+              alert(`还款金额不能超过选中订单的欠款总额 ¥${totalSelectedDebt}`);
+              return;
+          }
+
+          let remainingAmount = amount;
+          selectedOrders.forEach((order, index) => {
+              const orderDebt = order.totalAmount - (order.discount || 0) - order.receivedAmount;
+              let allocatedAmount = 0;
+              
+              if (index === selectedOrders.length - 1) {
+                  allocatedAmount = remainingAmount;
+              } else {
+                  allocatedAmount = preciseCalc(() => (orderDebt / totalSelectedDebt) * amount);
+                  remainingAmount = preciseCalc(() => remainingAmount - allocatedAmount);
+              }
+              
+              const newReceived = preciseCalc(() => order.receivedAmount + allocatedAmount);
+              updateOrder(order.id, { receivedAmount: newReceived });
+          });
+
+          addRepayment({ 
+              id: Date.now().toString(), 
+              customerId: repayingCustomer.id, 
+              customerName: repayingCustomer.name, 
+              amount: amount, 
+              date: new Date().toISOString(), 
+              payee: repayForm.payee,
+              paymentMethod,
+              mixedPayments,
+              note: repayForm.note || `勾选还款(${selectedOrders.length}笔订单)`
+          });
+      } else {
+          addRepayment({ 
+              id: Date.now().toString(), 
+              customerId: repayingCustomer.id, 
+              customerName: repayingCustomer.name, 
+              amount: amount, 
+              date: new Date().toISOString(), 
+              payee: repayForm.payee,
+              paymentMethod,
+              mixedPayments,
+              note: repayForm.note 
+          });
+      }
       
       alert('✅ 收款成功！');
       setRepayingCustomer(null);
+      setShowingDebtOrders(null);
+      setSelectedOrderIds([]);
+      setIsSelectedOrderRepay(false);
   };
 
   const handleAddNewCustomer = () => {
@@ -610,6 +712,98 @@ const QuickModal: React.FC<{
     });
     onClose();
   };
+
+  // 渲染：欠款订单列表
+  if (showingDebtOrders) {
+      return (
+        <div className="fixed inset-0 z-[220] bg-[#F1F3F6] flex flex-col animate-in slide-in-from-right">
+          <header className="bg-white px-4 py-4 flex items-center shrink-0 border-b border-gray-100 shadow-sm z-10">
+            <button onClick={() => setShowingDebtOrders(null)} className="text-[#3b82f6] text-base font-bold active:scale-95 transition-all">返回</button>
+            <h1 className="flex-1 text-center font-black text-lg text-[#1f2937] pr-8">{showingDebtOrders.name} - 欠款订单</h1>
+          </header>
+
+          <div className="bg-white px-4 py-3 border-b border-gray-100">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-gray-400 font-bold">欠款总额</p>
+                <p className="text-2xl font-black text-red-500">¥{showingDebtOrders.totalDebt.toLocaleString()}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-400 font-bold">共 {debtOrders.length} 笔</p>
+                <p className="text-xs text-gray-500 font-bold">已选 {selectedOrderIds.length} 笔</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 no-scrollbar pb-40">
+             {debtOrders.length > 0 ? debtOrders.map(order => {
+                const debtAmount = order.totalAmount - (order.discount || 0) - order.receivedAmount;
+                const isSelected = selectedOrderIds.includes(order.id);
+                return (
+                  <div 
+                    key={order.id} 
+                    onClick={() => handleToggleOrder(order.id)}
+                    className={`bg-white p-4 rounded-[1.2rem] shadow-sm border-2 transition-all cursor-pointer ${isSelected ? 'border-blue-500 bg-blue-50/50' : 'border-gray-50'}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="pt-1">
+                        <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-gray-300 bg-white'}`}>
+                          {isSelected && <CheckCircle2 size={14} className="text-white" />}
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <p className="font-black text-gray-800 text-sm">{order.orderNo}</p>
+                            <p className="text-[10px] text-gray-400 font-mono">{new Date(order.createdAt).toLocaleDateString()}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-400 font-bold">欠款</p>
+                            <p className="font-black text-red-500">¥{debtAmount.toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-gray-500 font-bold">总额: ¥{order.totalAmount.toLocaleString()}</span>
+                          <span className="text-gray-500 font-bold">已收: ¥{order.receivedAmount.toLocaleString()}</span>
+                        </div>
+                        {order.items.length > 0 && (
+                          <p className="text-[10px] text-gray-400 mt-1 truncate">
+                            {order.items.map(i => i.productName).join('、')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+             }) : (
+                <div className="text-center py-20 text-gray-400 font-bold">暂无欠款订单</div>
+             )}
+          </div>
+
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 shadow-lg z-20">
+            <div className="flex justify-between items-center mb-3">
+              <span className="text-sm text-gray-500 font-bold">已选金额</span>
+              <span className="text-xl font-black text-blue-600">¥{selectedDebtAmount.toLocaleString()}</span>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={handleFullRepayment}
+                className="flex-1 bg-gray-800 text-white py-4 rounded-2xl font-black text-base shadow-lg shadow-gray-200 active:scale-95 transition-all"
+              >
+                全额还款
+              </button>
+              <button 
+                onClick={handleSelectedRepayment}
+                disabled={selectedOrderIds.length === 0}
+                className={`flex-1 py-4 rounded-2xl font-black text-base shadow-lg active:scale-95 transition-all ${selectedOrderIds.length > 0 ? 'bg-blue-500 text-white shadow-blue-200' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              >
+                勾选收款
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+  }
 
   // 渲染：详细还款录入弹窗
   if (repayingCustomer) {
@@ -786,7 +980,7 @@ const QuickModal: React.FC<{
                         <p className={`text-2xl font-black ${c.totalDebt > 0 ? 'text-[#ef4444]' : 'text-[#d1d5db]'}`}>¥{c.totalDebt.toLocaleString()}</p>
                    </div>
                    <button 
-                        onClick={() => handleOpenRepay(c)}
+                        onClick={() => handleOpenDebtOrders(c)}
                         className={`w-11 h-11 rounded-xl flex items-center justify-center border-2 transition-all active:scale-90 ${c.totalDebt > 0 ? 'bg-[#ebf5ff] border-[#bfdbfe] text-[#3b82f6] shadow-sm' : 'bg-gray-50 border-gray-100 text-gray-300'}`}
                    >
                         <Wallet size={20} strokeWidth={2.5} />

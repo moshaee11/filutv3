@@ -8,7 +8,7 @@ import {
   History, Receipt, UserCheck, Calendar, LayoutGrid, AlertTriangle, Layers, ClipboardEdit, RefreshCw, AlertCircle,
   Plus, PlusCircle, CheckCircle2, UserCog, FileText, Check
 } from 'lucide-react';
-import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate } from '../types';
+import { PricingMode, OrderStatus, Order, Product, Batch, Repayment, ProductTemplate, PaymentMethod } from '../types';
 import { 
   preciseCalc, downloadJSON, 
   getPurchaseRanking, getCustomerDebtStats, getDormantCustomers,
@@ -293,6 +293,22 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
   const [newPayeeName, setNewPayeeName] = useState('');
   const [debtRiskFilter, setDebtRiskFilter] = useState<DebtRiskLevel | 'ALL'>('ALL');
 
+  // Order Edit State
+  const [isEditingOrder, setIsEditingOrder] = useState(false);
+  const [orderEditForm, setOrderEditForm] = useState({
+    date: '',
+    time: '',
+    paymentMethod: PaymentMethod.WECHAT,
+    mixedPayments: {
+      [PaymentMethod.WECHAT]: '',
+      [PaymentMethod.ALIPAY]: '',
+      [PaymentMethod.CASH]: ''
+    } as Record<PaymentMethod, string>,
+    receivedAmount: '',
+    discount: '',
+    note: ''
+  });
+
   // Payee Edit State
   const [editingPayee, setEditingPayee] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -329,7 +345,8 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
     actualQty: '', 
     actualWeight: '',
     actualInitialQty: '',
-    actualInitialWeight: ''
+    actualInitialWeight: '',
+    reason: ''
   });
 
   const { data, addBatch, updateBatch, deleteBatch, addProduct, updateProduct, deleteProduct, adjustStock, addExtraFee, addOrder, addRepayment, deleteCustomer, updateCustomer, removeExtraFee, deleteOrder, updateOrder, updateRepayment, addPayee, updatePayee, deletePayee, addTemplate, deleteTemplate, exportData, importData, addExpense } = useApp();
@@ -442,13 +459,21 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
         if (isNaN(initWeight)) return alert('请输入初始总重量');
     }
 
-    adjustStock(adjustForm.id, qty, isNaN(weight) ? 0 : weight, initQty, isNaN(initWeight) ? 0 : initWeight);
+    adjustStock(adjustForm.id, qty, isNaN(weight) ? 0 : weight, initQty, isNaN(initWeight) ? 0 : initWeight, adjustForm.reason || undefined);
     setSubView('inventory');
   };
 
   const handleAddFee = () => {
     if (!feeForm.amount || !selectedBatchId) return;
-    addExtraFee(selectedBatchId, { id: Date.now().toString(), name: feeForm.name, amount: parseFloat(feeForm.amount) });
+    const feeId = Date.now().toString();
+    addExpense({
+      id: feeId,
+      amount: parseFloat(feeForm.amount),
+      type: feeForm.name,
+      date: new Date().toISOString().split('T')[0],
+      note: '批次费用',
+      batchId: selectedBatchId
+    });
     setShowFeeModal(false);
     setFeeForm({ name: '运费', amount: '' });
   };
@@ -483,6 +508,81 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
         unitWeight: parseFloat(templateForm.unitWeight) || 0
     });
     setIsAddingTemplate(false);
+  };
+
+  const handleOpenOrderEdit = () => {
+    if (!selectedOrder) return;
+    const dateObj = new Date(selectedOrder.createdAt);
+    const dateStr = dateObj.toISOString().split('T')[0];
+    const timeStr = dateObj.toTimeString().slice(0, 5);
+    
+    const mixedPaymentsInit: Record<PaymentMethod, string> = {
+      [PaymentMethod.WECHAT]: '',
+      [PaymentMethod.ALIPAY]: '',
+      [PaymentMethod.CASH]: ''
+    };
+    
+    if (selectedOrder.paymentMethod === PaymentMethod.MIXED && selectedOrder.mixedPayments) {
+      selectedOrder.mixedPayments.forEach(mp => {
+        mixedPaymentsInit[mp.method] = mp.amount.toString();
+      });
+    }
+
+    setOrderEditForm({
+      date: dateStr,
+      time: timeStr,
+      paymentMethod: selectedOrder.paymentMethod,
+      mixedPayments: mixedPaymentsInit,
+      receivedAmount: selectedOrder.receivedAmount.toString(),
+      discount: selectedOrder.discount.toString(),
+      note: selectedOrder.note || ''
+    });
+    setIsEditingOrder(true);
+  };
+
+  const handleSaveOrderEdit = () => {
+    if (!selectedOrderId || !selectedOrder) return;
+    
+    const receivedAmount = parseFloat(orderEditForm.receivedAmount);
+    const discount = parseFloat(orderEditForm.discount);
+    
+    if (isNaN(receivedAmount) || receivedAmount < 0) return alert('请输入有效的实收金额');
+    if (isNaN(discount) || discount < 0) return alert('请输入有效的优惠金额');
+
+    const dateObj = new Date(selectedOrder.createdAt);
+    if (orderEditForm.date) {
+      const [y, m, d] = orderEditForm.date.split('-');
+      dateObj.setFullYear(parseInt(y), parseInt(m) - 1, parseInt(d));
+    }
+    if (orderEditForm.time) {
+      const [h, min] = orderEditForm.time.split(':');
+      dateObj.setHours(parseInt(h), parseInt(min), 0, 0);
+    }
+
+    let mixedPayments: { method: PaymentMethod; amount: number }[] | undefined;
+    if (orderEditForm.paymentMethod === PaymentMethod.MIXED) {
+      mixedPayments = [
+        { method: PaymentMethod.WECHAT, amount: parseFloat(orderEditForm.mixedPayments[PaymentMethod.WECHAT]) || 0 },
+        { method: PaymentMethod.ALIPAY, amount: parseFloat(orderEditForm.mixedPayments[PaymentMethod.ALIPAY]) || 0 },
+        { method: PaymentMethod.CASH, amount: parseFloat(orderEditForm.mixedPayments[PaymentMethod.CASH]) || 0 }
+      ].filter(m => m.amount > 0);
+    }
+
+    const updates: Partial<Order> = {
+      createdAt: dateObj.toISOString(),
+      paymentMethod: orderEditForm.paymentMethod,
+      receivedAmount,
+      discount,
+      note: orderEditForm.note
+    };
+
+    if (mixedPayments !== undefined) {
+      updates.mixedPayments = mixedPayments;
+    }
+
+    updateOrder(selectedOrderId, updates);
+    setIsEditingOrder(false);
+    alert('✅ 订单修改成功');
   };
 
   const handleSelectTemplate = (t: ProductTemplate) => {
@@ -1178,25 +1278,159 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
     );
   }
 
-  // ... (Rest of view logic remains same) ...
-  // 6. Order Detail View (Abbreviated, use previous content for full)
+  // 6. Order Detail View
   if (subView === 'order_detail' && selectedOrder) {
       const isCancelled = selectedOrder.status === OrderStatus.CANCELLED;
-      // ... (Same order detail code as before)
+
+      if (isEditingOrder) {
+        return (
+          <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
+            <header className="bg-[#2D3142] text-white p-6 pb-4 shrink-0 relative z-20">
+              <div className="flex justify-between items-center mb-2">
+                <button onClick={() => setIsEditingOrder(false)} className="bg-white/10 p-2 rounded-full"><X size={20} /></button>
+                <h1 className="font-black text-lg">编辑订单</h1>
+                <div className="w-9"></div>
+              </div>
+              <p className="text-center text-sm text-white/70 font-bold">{selectedOrder.orderNo}</p>
+            </header>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-32">
+              <div className="space-y-3">
+                <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">日期与时间</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <input 
+                    type="date"
+                    value={orderEditForm.date}
+                    onChange={e => setOrderEditForm({...orderEditForm, date: e.target.value})}
+                    className="w-full bg-gray-50 p-4 rounded-2xl font-bold text-gray-800 outline-none border-2 border-transparent focus:border-emerald-400 focus:bg-white transition-all"
+                  />
+                  <input 
+                    type="time"
+                    value={orderEditForm.time}
+                    onChange={e => setOrderEditForm({...orderEditForm, time: e.target.value})}
+                    className="w-full bg-gray-50 p-4 rounded-2xl font-bold text-gray-800 outline-none border-2 border-transparent focus:border-emerald-400 focus:bg-white transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">支付方式</label>
+                <div className="grid grid-cols-5 gap-2">
+                  {[
+                    { id: PaymentMethod.WECHAT, label: '微信', icon: '💬' },
+                    { id: PaymentMethod.ALIPAY, label: '支付宝', icon: '💳' },
+                    { id: PaymentMethod.CASH, label: '现金', icon: '💰' },
+                    { id: PaymentMethod.OTHER, label: '其他', icon: '📋' },
+                    { id: PaymentMethod.MIXED, label: '混合', icon: '🔀' },
+                  ].map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => setOrderEditForm({...orderEditForm, paymentMethod: m.id})}
+                      className={`py-3 rounded-xl text-[10px] font-black border-2 transition-all flex flex-col items-center gap-1 ${orderEditForm.paymentMethod === m.id ? 'border-emerald-500 bg-emerald-50 text-emerald-600' : 'border-gray-100 bg-gray-50 text-gray-400'}`}
+                    >
+                      <span className="text-lg">{m.icon}</span>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {orderEditForm.paymentMethod === PaymentMethod.MIXED && (
+                <div className="space-y-3 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                  <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">混合支付明细</label>
+                  {[
+                    { id: PaymentMethod.WECHAT, label: '微信', color: 'text-green-600' },
+                    { id: PaymentMethod.ALIPAY, label: '支付宝', color: 'text-blue-600' },
+                    { id: PaymentMethod.CASH, label: '现金', color: 'text-orange-600' }
+                  ].map(m => (
+                    <div key={m.id} className="flex items-center justify-between bg-white p-3 rounded-xl border border-gray-100">
+                      <span className={`text-sm font-black w-16 ${m.color}`}>{m.label}</span>
+                      <input
+                        type="number"
+                        placeholder="0"
+                        value={orderEditForm.mixedPayments[m.id as PaymentMethod]}
+                        onChange={e => setOrderEditForm({
+                          ...orderEditForm,
+                          mixedPayments: {
+                            ...orderEditForm.mixedPayments,
+                            [m.id]: e.target.value
+                          }
+                        })}
+                        className="w-full bg-transparent text-right text-lg font-black text-gray-800 outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">实收金额</label>
+                <input 
+                  type="number"
+                  value={orderEditForm.receivedAmount}
+                  onChange={e => setOrderEditForm({...orderEditForm, receivedAmount: e.target.value})}
+                  className="w-full bg-emerald-50 p-5 rounded-2xl text-3xl font-black text-emerald-600 outline-none border-2 border-transparent focus:border-emerald-500 transition-all text-center"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">优惠/抹零</label>
+                <input 
+                  type="number"
+                  value={orderEditForm.discount}
+                  onChange={e => setOrderEditForm({...orderEditForm, discount: e.target.value})}
+                  className="w-full bg-gray-50 p-4 rounded-2xl text-xl font-black text-gray-800 outline-none border-2 border-transparent focus:border-emerald-400 transition-all text-center"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">备注</label>
+                <textarea
+                  value={orderEditForm.note}
+                  onChange={e => setOrderEditForm({...orderEditForm, note: e.target.value})}
+                  placeholder="备注信息（可选）"
+                  rows={3}
+                  className="w-full bg-gray-50 p-4 rounded-2xl font-bold text-gray-800 outline-none border-2 border-transparent focus:border-emerald-400 transition-all resize-none"
+                />
+              </div>
+            </div>
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t shadow-lg z-20">
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsEditingOrder(false)}
+                  className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black text-base active:scale-95 transition-all"
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={handleSaveOrderEdit}
+                  className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl font-black text-base shadow-lg shadow-emerald-200 active:scale-95 transition-all"
+                >
+                  保存修改
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
        return (
       <div className="fixed inset-0 z-[200] bg-white flex flex-col animate-in slide-in-from-right">
          <header className="bg-[#2D3142] text-white p-6 pb-8 shrink-0 relative z-20">
             <div className="flex justify-between items-center mb-6">
                <button onClick={() => setSubView('history')} className="bg-white/10 p-2 rounded-full"><ArrowLeft size={20} /></button>
                <h1 className="font-black text-lg">订单详情</h1>
-               <div className="w-9"></div>
+               {!isCancelled ? (
+                 <button onClick={handleOpenOrderEdit} className="bg-white/10 p-2 rounded-full"><Edit2 size={20} /></button>
+               ) : (
+                 <div className="w-9"></div>
+               )}
             </div>
             <div className="text-center space-y-1">
                <p className="text-3xl font-black">¥{selectedOrder.totalAmount}</p>
                <p className={`text-sm font-bold opacity-80 ${isCancelled ? 'text-red-400' : ''}`}>{isCancelled ? '已作废' : '订单总额'}</p>
             </div>
          </header>
-         <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-6 relative z-10 pt-10">
+         <div className="flex-1 overflow-y-auto p-6 -mt-6 bg-white rounded-t-[2rem] space-y-6 relative z-10 pt-10 pb-32">
             <div className="space-y-4">
                {selectedOrder.items && selectedOrder.items.map((item, idx) => (
                   <div key={idx} className="flex justify-between items-center border-b border-gray-50 pb-4 last:border-0">
@@ -1313,7 +1547,8 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                                actualQty: '',
                                actualWeight: '',
                                actualInitialQty: p.initialStockQty.toString(),
-                               actualInitialWeight: p.initialStockWeight.toString()
+                               actualInitialWeight: p.initialStockWeight.toString(),
+                               reason: ''
                            }); 
                            setSubView('adjust_stock'); 
                        }} 
@@ -1427,6 +1662,32 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                             />
                         </div>
                     </div>
+                </div>
+
+                {/* 原因/备注 */}
+                <div className="bg-white p-4 rounded-2xl border border-gray-100 space-y-4">
+                    <div className="flex items-center gap-2">
+                        <ClipboardEdit size={14} className="text-gray-400"/>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest">原因 / 备注</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {['切瓜损耗', '自然损耗', '质量损坏', '退货', '盘点差异', '其他'].map(reason => (
+                            <button
+                                key={reason}
+                                onClick={() => setAdjustForm({...adjustForm, reason})}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${adjustForm.reason === reason ? 'bg-purple-500 text-white shadow-md' : 'bg-gray-100 text-gray-500 active:bg-gray-200'}`}
+                            >
+                                {reason}
+                            </button>
+                        ))}
+                    </div>
+                    <input 
+                        type="text" 
+                        value={adjustForm.reason} 
+                        onChange={e => setAdjustForm({...adjustForm, reason: e.target.value})}
+                        placeholder="可手动输入原因..."
+                        className="w-full bg-gray-50 p-3 rounded-xl font-bold text-gray-800 outline-none focus:ring-2 ring-purple-100 border border-gray-100 text-sm"
+                    />
                 </div>
 
                 <div className="pt-8 pb-32">
