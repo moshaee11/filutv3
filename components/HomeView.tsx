@@ -661,7 +661,7 @@ const QuickModal: React.FC<{
               paymentMethod,
               mixedPayments,
               note: repayForm.note || `勾选还款(${selectedOrders.length}笔订单)`
-          });
+          }, true);
       } else {
           addRepayment({ 
               id: Date.now().toString(), 

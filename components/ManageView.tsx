@@ -295,6 +295,7 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
 
   // Order Edit State
   const [isEditingOrder, setIsEditingOrder] = useState(false);
+  const [showProductPicker, setShowProductPicker] = useState(false);
   const [orderEditForm, setOrderEditForm] = useState({
     date: '',
     time: '',
@@ -306,7 +307,8 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
     } as Record<PaymentMethod, string>,
     receivedAmount: '',
     discount: '',
-    note: ''
+    note: '',
+    items: [] as Order['items']
   });
 
   // Payee Edit State
@@ -535,9 +537,128 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
       mixedPayments: mixedPaymentsInit,
       receivedAmount: selectedOrder.receivedAmount.toString(),
       discount: selectedOrder.discount.toString(),
-      note: selectedOrder.note || ''
+      note: selectedOrder.note || '',
+      items: [...selectedOrder.items]
     });
     setIsEditingOrder(true);
+  };
+
+  const handleEditItemQty = (index: number, qtyStr: string) => {
+    const qty = parseFloat(qtyStr) || 0;
+    if (qty < 0) return;
+    setOrderEditForm(prev => {
+      const newItems = [...prev.items];
+      const item = { ...newItems[index] };
+      const product = data.products.find(p => p.id === item.productId);
+      const oldQty = item.qty;
+      const qtyDiff = qty - oldQty;
+      if (product && qtyDiff > 0) {
+        const availableQty = product.stockQty + oldQty;
+        if (qty > availableQty) {
+          alert(`库存不足！当前可用 ${availableQty} 件`);
+          return prev;
+        }
+      }
+      item.qty = qty;
+      if (product?.pricingMode === PricingMode.WEIGHT) {
+        const unitWeight = product.unitWeight || 0;
+        const tareWeight = item.tareWeight || product.defaultTare * qty;
+        item.grossWeight = preciseCalc(() => qty * unitWeight);
+        item.netWeight = preciseCalc(() => item.grossWeight - tareWeight);
+        if (product && qtyDiff > 0) {
+          const availableWeight = product.stockWeight + (oldQty * unitWeight - item.tareWeight);
+          if (item.netWeight > availableWeight + 0.01) {
+            alert(`库存重量不足！`);
+            return prev;
+          }
+        }
+      }
+      item.subtotal = preciseCalc(() => item.qty * item.unitPrice);
+      newItems[index] = item;
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const handleEditItemPrice = (index: number, priceStr: string) => {
+    const price = parseFloat(priceStr) || 0;
+    if (price < 0) return;
+    setOrderEditForm(prev => {
+      const newItems = [...prev.items];
+      const item = { ...newItems[index] };
+      item.unitPrice = price;
+      item.subtotal = preciseCalc(() => item.qty * item.unitPrice);
+      newItems[index] = item;
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const handleEditItemWeight = (index: number, weightStr: string) => {
+    const weight = parseFloat(weightStr) || 0;
+    if (weight < 0) return;
+    setOrderEditForm(prev => {
+      const newItems = [...prev.items];
+      const item = { ...newItems[index] };
+      const product = data.products.find(p => p.id === item.productId);
+      const oldNetWeight = item.netWeight;
+      const weightDiff = weight - oldNetWeight;
+      if (product && weightDiff > 0) {
+        const availableWeight = product.stockWeight + oldNetWeight;
+        if (weight > availableWeight + 0.01) {
+          alert(`库存重量不足！当前可用 ${availableWeight.toFixed(2)} 斤`);
+          return prev;
+        }
+      }
+      item.netWeight = weight;
+      item.subtotal = preciseCalc(() => item.netWeight * item.unitPrice);
+      newItems[index] = item;
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const handleRemoveItem = (index: number) => {
+    setOrderEditForm(prev => {
+      const newItems = prev.items.filter((_, i) => i !== index);
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const handleAddProductToOrder = (product: Product) => {
+    const existingIndex = orderEditForm.items.findIndex(i => i.productId === product.id);
+    if (existingIndex >= 0) {
+      alert('该商品已在订单中');
+      return;
+    }
+    if (product.stockQty <= 0) {
+      alert('该商品库存为0');
+      return;
+    }
+    const isWeight = product.pricingMode === PricingMode.WEIGHT;
+    const defaultQty = 1;
+    const unitWeight = product.unitWeight || 0;
+    const grossWeight = isWeight ? defaultQty * unitWeight : 0;
+    const tareWeight = isWeight ? product.defaultTare * defaultQty : 0;
+    const netWeight = isWeight ? grossWeight - tareWeight : 0;
+    const unitPrice = product.sellingPrice || 0;
+    const subtotal = isWeight 
+      ? preciseCalc(() => netWeight * unitPrice)
+      : preciseCalc(() => defaultQty * unitPrice);
+
+    const newItem: Order['items'][0] = {
+      productId: product.id,
+      productName: product.name,
+      qty: defaultQty,
+      grossWeight,
+      tareWeight,
+      netWeight,
+      unitPrice,
+      subtotal
+    };
+
+    setOrderEditForm(prev => ({
+      ...prev,
+      items: [...prev.items, newItem]
+    }));
+    setShowProductPicker(false);
   };
 
   const handleSaveOrderEdit = () => {
@@ -548,6 +669,7 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
     
     if (isNaN(receivedAmount) || receivedAmount < 0) return alert('请输入有效的实收金额');
     if (isNaN(discount) || discount < 0) return alert('请输入有效的优惠金额');
+    if (orderEditForm.items.length === 0) return alert('订单至少需要一个商品');
 
     const dateObj = new Date(selectedOrder.createdAt);
     if (orderEditForm.date) {
@@ -573,7 +695,8 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
       paymentMethod: orderEditForm.paymentMethod,
       receivedAmount,
       discount,
-      note: orderEditForm.note
+      note: orderEditForm.note,
+      items: orderEditForm.items
     };
 
     if (mixedPayments !== undefined) {
@@ -1081,14 +1204,44 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                         </div>
                     </div>
                     
-                    <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 text-sm text-gray-600 space-y-2">
+                    <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 text-sm text-gray-600 space-y-3">
                         <p>您即将删除：<span className="font-black text-gray-900">{selectedBatch.plateNumber}</span></p>
-                        <div className="h-px bg-gray-200 my-2"></div>
+                        <div className="h-px bg-gray-200"></div>
                         <p className="font-bold">连带删除内容：</p>
                         <ul className="list-disc pl-4 space-y-1 text-xs">
                             <li>关联的所有商品及库存</li>
                             <li>关联的费用支出 (运费/过磅费等)</li>
                         </ul>
+                        <div className="h-px bg-gray-200"></div>
+                        <p className="font-bold">库存详情：</p>
+                        {(() => {
+                            const batchProducts = data.products.filter(p => p.batchId === selectedBatch.id);
+                            const productCount = batchProducts.length;
+                            const totalStockQty = batchProducts.reduce((sum, p) => sum + p.stockQty, 0);
+                            const totalStockWeight = batchProducts.reduce((sum, p) => sum + p.stockWeight, 0);
+                            const hasStock = totalStockQty > 0 || totalStockWeight > 0;
+                            return (
+                                <div className="space-y-1 text-xs">
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-500">商品种类：</span>
+                                        <span className="font-black text-gray-800">共 {productCount} 种</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-500">剩余库存件数：</span>
+                                        <span className="font-black text-gray-800">{totalStockQty} 件</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-500">剩余库存重量：</span>
+                                        <span className="font-black text-gray-800">{totalStockWeight} 斤</span>
+                                    </div>
+                                    {hasStock && (
+                                        <p className="text-red-500 font-black pt-2 flex items-center gap-1">
+                                            <AlertTriangle size={14} /> 还有库存未售完，删除后数据无法恢复
+                                        </p>
+                                    )}
+                                </div>
+                            );
+                        })()}
                     </div>
 
                     <div className="flex gap-3 pt-2">
@@ -1295,6 +1448,94 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
             </header>
             <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-32">
               <div className="space-y-3">
+                <div className="flex items-center justify-between px-2">
+                  <label className="text-xs font-black text-gray-400 uppercase tracking-widest">商品明细</label>
+                  <button 
+                    onClick={() => setShowProductPicker(true)}
+                    className="text-xs font-black text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full flex items-center gap-1"
+                  >
+                    <Plus size={14} /> 添加商品
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {orderEditForm.items.map((item, idx) => {
+                    const product = data.products.find(p => p.id === item.productId);
+                    const isWeight = product?.pricingMode === PricingMode.WEIGHT;
+                    return (
+                      <div key={idx} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="font-black text-gray-800">{item.productName}</p>
+                          <button 
+                            onClick={() => handleRemoveItem(idx)}
+                            className="text-red-400 p-1 -mr-1"
+                          >
+                            <X size={18} />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-gray-400">数量(件)</label>
+                            <input
+                              type="number"
+                              value={item.qty}
+                              onChange={e => handleEditItemQty(idx, e.target.value)}
+                              className="w-full mt-1 bg-white p-2 rounded-xl font-bold text-sm text-gray-800 outline-none border border-gray-200 focus:border-emerald-400 text-center"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-gray-400">单价(元)</label>
+                            <input
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={e => handleEditItemPrice(idx, e.target.value)}
+                              className="w-full mt-1 bg-white p-2 rounded-xl font-bold text-sm text-emerald-600 outline-none border border-gray-200 focus:border-emerald-400 text-center"
+                            />
+                          </div>
+                          {isWeight ? (
+                            <div>
+                              <label className="text-[10px] font-bold text-gray-400">净重(斤)</label>
+                              <input
+                                type="number"
+                                value={item.netWeight}
+                                onChange={e => handleEditItemWeight(idx, e.target.value)}
+                                className="w-full mt-1 bg-white p-2 rounded-xl font-bold text-sm text-gray-800 outline-none border border-gray-200 focus:border-emerald-400 text-center"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="text-[10px] font-bold text-gray-400">小计(元)</label>
+                              <div className="w-full mt-1 bg-white p-2 rounded-xl font-bold text-sm text-gray-800 border border-gray-200 text-center">
+                                ¥{item.subtotal}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {isWeight && (
+                          <div className="flex justify-between text-xs bg-white p-2 rounded-xl border border-gray-100">
+                            <span className="text-gray-400 font-bold">小计</span>
+                            <span className="font-black text-gray-800">¥{item.subtotal}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {orderEditForm.items.length === 0 && (
+                    <div className="bg-gray-50 p-8 rounded-2xl text-center text-gray-400 font-bold text-sm border border-dashed border-gray-200">
+                      暂无商品，点击上方"添加商品"添加
+                    </div>
+                  )}
+                </div>
+                {orderEditForm.items.length > 0 && (
+                  <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex justify-between items-center">
+                    <span className="font-black text-emerald-700 text-sm">商品合计</span>
+                    <span className="font-black text-emerald-600 text-xl">
+                      ¥{orderEditForm.items.reduce((sum, item) => preciseCalc(() => sum + item.subtotal), 0)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3">
                 <label className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">日期与时间</label>
                 <div className="grid grid-cols-2 gap-3">
                   <input 
@@ -1409,6 +1650,56 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                 </button>
               </div>
             </div>
+
+            {showProductPicker && (
+              <div className="fixed inset-0 z-[300] bg-black/50 backdrop-blur-sm flex items-end justify-center animate-in fade-in">
+                <div className="bg-white w-full max-w-lg rounded-t-[2rem] p-6 space-y-4 animate-in slide-in-from-bottom max-h-[80vh] flex flex-col">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-black text-xl">选择商品</h3>
+                    <button 
+                      onClick={() => setShowProductPicker(false)}
+                      className="p-2 text-gray-400"
+                    >
+                      <X size={24} />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-2">
+                    {data.products.filter(p => p.stockQty > 0).map(product => {
+                      const alreadyInOrder = orderEditForm.items.some(i => i.productId === product.id);
+                      return (
+                        <div
+                          key={product.id}
+                          onClick={() => !alreadyInOrder && handleAddProductToOrder(product)}
+                          className={`p-4 rounded-2xl border flex justify-between items-center transition-all ${
+                            alreadyInOrder 
+                              ? 'bg-gray-50 border-gray-200 opacity-50' 
+                              : 'bg-white border-gray-100 active:bg-emerald-50 active:border-emerald-200'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-black text-gray-800">{product.name}</p>
+                            <p className="text-xs text-gray-400 font-bold">
+                              库存: {product.stockQty}件 / {product.stockWeight}斤
+                              {product.sellingPrice ? ` | 售价 ¥${product.sellingPrice}` : ''}
+                            </p>
+                          </div>
+                          {alreadyInOrder ? (
+                            <span className="text-xs font-black text-gray-400">已添加</span>
+                          ) : (
+                            <Plus size={20} className="text-emerald-500" />
+                          )}
+                        </div>
+                      );
+                    })}
+                    {data.products.filter(p => p.stockQty > 0).length === 0 && (
+                      <div className="text-center py-10 text-gray-400 font-bold text-sm">
+                        暂无库存商品
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -2319,6 +2610,10 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                       <div className="p-4 shrink-0 flex gap-3">
                           <button
                               onClick={() => {
+                                  if (selectedCustomer.totalDebt > 0) {
+                                      alert("该客户还有未结清欠款，无法删除。请先结清所有欠款后再删除。");
+                                      return;
+                                  }
                                   if (confirm(`确认删除客户「${selectedCustomer.name}」吗？`)) {
                                       deleteCustomer(selectedCustomer.id);
                                       setShowCustomerEditModal(false);

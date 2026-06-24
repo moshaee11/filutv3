@@ -17,7 +17,7 @@ interface AppContextType {
   cancelOrder: (id: string) => void;
   deleteOrder: (id: string) => void;
   updateOrder: (id: string, updates: Partial<Order>) => void;
-  addRepayment: (r: Repayment) => void;
+  addRepayment: (r: Repayment, skipAutoAllocate?: boolean) => void;
   updateRepayment: (id: string, updates: Partial<Repayment>) => void;
   deleteRepayment: (id: string) => void;
   addExpense: (e: Expense) => void;
@@ -81,18 +81,48 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
     }
   });
 
-  repayments.forEach(r => {
-    if (r.customerId) {
-      const current = debtMap.get(r.customerId) || 0;
-      debtMap.set(r.customerId, preciseCalc(() => current - r.amount));
-    }
-  });
-
   return customers.map(c => {
     if (c.isGuest) return c;
     const calculatedDebt = Math.max(0, debtMap.get(c.id) || 0); 
     return { ...c, totalDebt: calculatedDebt };
   });
+};
+
+const allocateRepaymentToOrders = (orders: Order[], customerId: string, amount: number): Order[] => {
+  const customerOrders = orders
+    .filter(o => o.status === OrderStatus.ACTIVE && o.customerId === customerId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  let remaining = amount;
+  const updatedOrders = orders.map(o => {
+    if (o.customerId !== customerId || o.status !== OrderStatus.ACTIVE) return o;
+    if (remaining <= 0) return o;
+    const debt = preciseCalc(() => o.totalAmount - o.discount - o.receivedAmount);
+    if (debt <= 0) return o;
+    const pay = Math.min(debt, remaining);
+    remaining = preciseCalc(() => remaining - pay);
+    return { ...o, receivedAmount: preciseCalc(() => o.receivedAmount + pay) };
+  });
+
+  return updatedOrders;
+};
+
+const rollbackRepaymentFromOrders = (orders: Order[], customerId: string, amount: number): Order[] => {
+  const customerOrders = orders
+    .filter(o => o.status === OrderStatus.ACTIVE && o.customerId === customerId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  let remaining = amount;
+  const updatedOrders = orders.map(o => {
+    if (o.customerId !== customerId || o.status !== OrderStatus.ACTIVE) return o;
+    if (remaining <= 0) return o;
+    if (o.receivedAmount <= 0) return o;
+    const rollback = Math.min(o.receivedAmount, remaining);
+    remaining = preciseCalc(() => remaining - rollback);
+    return { ...o, receivedAmount: preciseCalc(() => o.receivedAmount - rollback) };
+  });
+
+  return updatedOrders;
 };
 
 const sanitizeData = (incoming: any): AppData => {
@@ -610,8 +640,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateOrder = (id: string, updates: Partial<Order>) => {
     setData(prev => {
       const before = prev.orders.find(o => o.id === id);
+      if (!before) return prev;
+
+      let newProducts = prev.products;
+      let newStockLogs: StockLog[] = [];
+      let finalUpdates = { ...updates };
+
+      // 如果有 items 变更，处理库存调整
+      if (updates.items !== undefined && before.status === OrderStatus.ACTIVE) {
+        const oldItems = before.items;
+        const newItems = updates.items;
+
+        // 重新计算 totalAmount
+        const newTotalAmount = newItems.reduce((sum, item) => 
+          preciseCalc(() => sum + item.subtotal), 0
+        );
+        finalUpdates.totalAmount = newTotalAmount;
+
+        // 收集所有涉及的 productId
+        const allProductIds = new Set([
+          ...oldItems.map(i => i.productId),
+          ...newItems.map(i => i.productId)
+        ]);
+
+        const productDiffs: Array<{
+          productId: string;
+          productName: string;
+          qtyDiff: number;
+          weightDiff: number;
+        }> = [];
+
+        allProductIds.forEach(pid => {
+          const oldItem = oldItems.find(i => i.productId === pid);
+          const newItem = newItems.find(i => i.productId === pid);
+          const oldQty = oldItem?.qty || 0;
+          const newQty = newItem?.qty || 0;
+          const oldWeight = oldItem?.netWeight || 0;
+          const newWeight = newItem?.netWeight || 0;
+          const qtyDiff = preciseCalc(() => newQty - oldQty);
+          const weightDiff = preciseCalc(() => newWeight - oldWeight);
+          if (qtyDiff !== 0 || weightDiff !== 0) {
+            productDiffs.push({
+              productId: pid,
+              productName: newItem?.productName || oldItem?.productName || '',
+              qtyDiff,
+              weightDiff
+            });
+          }
+        });
+
+        // 更新库存
+        newProducts = prev.products.map(p => {
+          const diff = productDiffs.find(d => d.productId === p.id);
+          if (!diff) return p;
+          const newQty = preciseCalc(() => p.stockQty - diff.qtyDiff);
+          const newWeight = preciseCalc(() => p.stockWeight - diff.weightDiff);
+          return {
+            ...p,
+            stockQty: newQty,
+            stockWeight: newWeight
+          };
+        });
+
+        // 生成库存流水
+        productDiffs.forEach(diff => {
+          const prod = newProducts.find(p => p.id === diff.productId);
+          if (diff.qtyDiff === 0 && diff.weightDiff === 0) return;
+          const isIncrease = diff.qtyDiff < 0 || diff.weightDiff < 0;
+          newStockLogs.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${diff.productId.slice(-4)}`,
+            productId: diff.productId,
+            productName: diff.productName,
+            type: isIncrease ? 'RETURN' : 'OUTBOUND',
+            qtyChange: -diff.qtyDiff,
+            weightChange: -diff.weightDiff,
+            qtyAfter: prod?.stockQty ?? 0,
+            weightAfter: prod?.stockWeight ?? 0,
+            reason: '订单编辑调整',
+            relatedOrderId: id,
+            createdAt: new Date().toISOString()
+          });
+        });
+      }
+
       const newOrders = prev.orders.map(o =>
-        o.id === id ? { ...o, ...updates, updatedAt: new Date().toISOString() } : o
+        o.id === id ? { ...o, ...finalUpdates, updatedAt: new Date().toISOString() } : o
       );
       const newCustomers = recalculateAllDebts(newOrders, prev.repayments, prev.customers);
 
@@ -619,20 +732,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let opLog: OpLog | null = null;
       if (before) {
         const changes: string[] = [];
-        if (updates.totalAmount !== undefined && updates.totalAmount !== before.totalAmount) {
-          changes.push(`金额 ¥${before.totalAmount} → ¥${updates.totalAmount}`);
+        if (finalUpdates.items !== undefined) {
+          changes.push(`商品明细变更（${before.items.length}项 → ${finalUpdates.items.length}项）`);
         }
-        if (updates.discount !== undefined && updates.discount !== before.discount) {
-          changes.push(`优惠 ¥${before.discount} → ¥${updates.discount}`);
+        if (finalUpdates.totalAmount !== undefined && finalUpdates.totalAmount !== before.totalAmount) {
+          changes.push(`金额 ¥${before.totalAmount} → ¥${finalUpdates.totalAmount}`);
         }
-        if (updates.receivedAmount !== undefined && updates.receivedAmount !== before.receivedAmount) {
-          changes.push(`实收 ¥${before.receivedAmount} → ¥${updates.receivedAmount}`);
+        if (finalUpdates.discount !== undefined && finalUpdates.discount !== before.discount) {
+          changes.push(`优惠 ¥${before.discount} → ¥${finalUpdates.discount}`);
         }
-        if (updates.paymentMethod !== undefined && updates.paymentMethod !== before.paymentMethod) {
-          changes.push(`支付方式 ${before.paymentMethod} → ${updates.paymentMethod}`);
+        if (finalUpdates.receivedAmount !== undefined && finalUpdates.receivedAmount !== before.receivedAmount) {
+          changes.push(`实收 ¥${before.receivedAmount} → ¥${finalUpdates.receivedAmount}`);
         }
-        if (updates.status !== undefined && updates.status !== before.status) {
-          changes.push(`状态 ${before.status} → ${updates.status}`);
+        if (finalUpdates.paymentMethod !== undefined && finalUpdates.paymentMethod !== before.paymentMethod) {
+          changes.push(`支付方式 ${before.paymentMethod} → ${finalUpdates.paymentMethod}`);
+        }
+        if (finalUpdates.status !== undefined && finalUpdates.status !== before.status) {
+          changes.push(`状态 ${before.status} → ${finalUpdates.status}`);
         }
         if (changes.length > 0) {
           opLog = {
@@ -640,7 +756,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             type: 'ORDER_EDIT',
             description: `修改订单 ${before.orderNo}：${changes.join('，')}`,
             beforeSnapshot: before,
-            afterSnapshot: updates,
+            afterSnapshot: finalUpdates,
             createdAt: new Date().toISOString()
           };
         }
@@ -648,21 +764,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         ...prev,
+        products: newProducts,
         orders: newOrders,
         customers: newCustomers,
+        stockLogs: [...newStockLogs, ...prev.stockLogs],
         opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
       };
     });
   };
 
-  const addRepayment = (r: Repayment) => {
+  const addRepayment = (r: Repayment, skipAutoAllocate?: boolean) => {
     setData(prev => {
       const normalized: Repayment = {
         ...r,
         createdAt: r.createdAt || new Date().toISOString(),
       };
+      
+      let newOrders = prev.orders;
+      if (!skipAutoAllocate && r.customerId && r.customerId !== 'guest') {
+        newOrders = allocateRepaymentToOrders(prev.orders, r.customerId, r.amount);
+      }
+      
       const newRepayments = [normalized, ...prev.repayments];
-      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
 
       // 操作日志
       const opLog: OpLog = {
@@ -675,6 +799,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         ...prev,
+        orders: newOrders,
         customers: newCustomers,
         repayments: newRepayments,
         opLogs: [opLog, ...prev.opLogs]
@@ -685,10 +810,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateRepayment = (id: string, updates: Partial<Repayment>) => {
     setData(prev => {
       const before = prev.repayments.find(r => r.id === id);
+      if (!before) return prev;
+
+      let newOrders = prev.orders;
+      
+      if (before.customerId && before.customerId !== 'guest') {
+        newOrders = rollbackRepaymentFromOrders(newOrders, before.customerId, before.amount);
+      }
+
       const newRepayments = prev.repayments.map(r =>
         r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r
       );
-      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+
+      const updatedRepayment = newRepayments.find(r => r.id === id);
+      if (updatedRepayment && updatedRepayment.customerId && updatedRepayment.customerId !== 'guest') {
+        newOrders = allocateRepaymentToOrders(newOrders, updatedRepayment.customerId, updatedRepayment.amount);
+      }
+
+      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
 
       // 操作日志
       let opLog: OpLog | null = null;
@@ -712,6 +851,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         ...prev,
+        orders: newOrders,
         repayments: newRepayments,
         customers: newCustomers,
         opLogs: opLog ? [opLog, ...prev.opLogs] : prev.opLogs
@@ -723,8 +863,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setData(prev => {
       const target = prev.repayments.find(r => r.id === id);
       if (!target) return prev;
+      
+      let newOrders = prev.orders;
+      if (target.customerId && target.customerId !== 'guest') {
+        newOrders = rollbackRepaymentFromOrders(newOrders, target.customerId, target.amount);
+      }
+      
       const newRepayments = prev.repayments.filter(r => r.id !== id);
-      const newCustomers = recalculateAllDebts(prev.orders, newRepayments, prev.customers);
+      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
 
       // 操作日志
       const opLog: OpLog = {
@@ -737,6 +883,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         ...prev,
+        orders: newOrders,
         repayments: newRepayments,
         customers: newCustomers,
         opLogs: [opLog, ...prev.opLogs]
