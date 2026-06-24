@@ -556,14 +556,16 @@ const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
       expenseByCategory[cat] = (expenseByCategory[cat] || 0) + e.amount;
     });
 
-    // Summing up cash flow by channel (Order Received + Repayment Received)
+    // Summing up cash flow by channel
+    // 现金流 = 开单时实收(initialReceivedAmount) + 还款实收
     const sumChannel = (method: PaymentMethod) => {
         if (filterMethod !== 'ALL' && filterMethod !== method) return 0;
         const fromOrders = orders.reduce((sum, o) => {
             if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
                 return sum + (o.mixedPayments.find(m => m.method === method)?.amount || 0);
             }
-            return sum + (o.paymentMethod === method ? o.receivedAmount : 0);
+            // 用 initialReceivedAmount：开单时收到的那部分（不含后续还款分摊）
+            return sum + (o.paymentMethod === method ? (o.initialReceivedAmount || 0) : 0);
         }, 0);
         const fromRepayments = repayments.reduce((sum, r) => {
             if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
@@ -582,9 +584,10 @@ const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
         ? orders.reduce((sum, o) => sum + (Math.max(0, (o.totalAmount - o.discount) - o.receivedAmount)), 0)
         : 0;
     
+    // 开单时实收（不含后续还款分摊）
     const totalOrderReceived = orders.reduce((sum, o) => {
-        if (filterMethod === 'ALL') return sum + o.receivedAmount;
-        if (o.paymentMethod === filterMethod) return sum + o.receivedAmount;
+        if (filterMethod === 'ALL') return sum + (o.initialReceivedAmount || o.receivedAmount);
+        if (o.paymentMethod === filterMethod) return sum + (o.initialReceivedAmount || o.receivedAmount);
         if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
             return sum + (o.mixedPayments.find(m => m.method === filterMethod)?.amount || 0);
         }

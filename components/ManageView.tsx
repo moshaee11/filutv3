@@ -2020,15 +2020,27 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
           return r.date.startsWith(reconcileDate);
       });
       
-      const incomeFromOrders = filteredReconcileOrders.reduce((sum, o) => sum + o.receivedAmount, 0);
+      // 现金流 = 开单时实收 + 还款实收（不重复计算）
+      const incomeFromOrders = filteredReconcileOrders.reduce((sum, o) => sum + (o.initialReceivedAmount || o.receivedAmount), 0);
       const incomeFromRepayments = filteredReconcileRepayments.reduce((sum, r) => sum + r.amount, 0);
       const income = incomeFromOrders + incomeFromRepayments;
       
       const expense = filteredReconcileExpenses.reduce((sum, e) => sum + e.amount, 0);
       
+      // 按渠道拆分：订单开单时实收 + 还款
       const sumByMethod = (method: string) => {
-          const fromOrders = filteredReconcileOrders.filter(o => o.paymentMethod === method).reduce((s,o)=>s+o.receivedAmount,0);
-          const fromRepayments = filteredReconcileRepayments.filter(r => r.paymentMethod === method).reduce((s,r)=>s+r.amount,0);
+          const fromOrders = filteredReconcileOrders.reduce((s, o) => {
+            if (o.paymentMethod === PaymentMethod.MIXED && o.mixedPayments) {
+              return s + (o.mixedPayments.find(m => m.method === method)?.amount || 0);
+            }
+            return s + (o.paymentMethod === method ? (o.initialReceivedAmount || o.receivedAmount) : 0);
+          }, 0);
+          const fromRepayments = filteredReconcileRepayments.reduce((s, r) => {
+            if (r.paymentMethod === PaymentMethod.MIXED && r.mixedPayments) {
+              return s + (r.mixedPayments.find(m => m.method === method)?.amount || 0);
+            }
+            return s + (r.paymentMethod === method ? r.amount : 0);
+          }, 0);
           return fromOrders + fromRepayments;
       };
 
@@ -2099,19 +2111,14 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
           return matchSearch && matchRisk;
       });
 
-      // Calculate debt by payee
+      // 按开单人统计欠款：只基于订单 receivedAmount，不含还款记录（避免双重扣减）
       const debtByPayee: Record<string, number> = {};
       data.payees.forEach(p => debtByPayee[p] = 0);
       
-      data.orders.filter(o => o.status === OrderStatus.ACTIVE && o.totalAmount > o.receivedAmount + o.discount).forEach(o => {
+      data.orders.filter(o => o.status === OrderStatus.ACTIVE && o.totalAmount - o.receivedAmount - o.discount > 0).forEach(o => {
           const debt = o.totalAmount - o.receivedAmount - o.discount;
           if (o.payee) {
               debtByPayee[o.payee] = (debtByPayee[o.payee] || 0) + debt;
-          }
-      });
-      data.repayments.forEach(r => {
-          if (r.payee && debtByPayee[r.payee] !== undefined) {
-              debtByPayee[r.payee] -= r.amount;
           }
       });
 

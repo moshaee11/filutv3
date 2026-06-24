@@ -80,10 +80,11 @@ export interface Order {
   customerId: string;
   customerName: string;
   items: OrderItem[];
-  totalAmount: number; 
-  receivedAmount: number;
+  totalAmount: number;
+  initialReceivedAmount: number; // 开单时实收（含全额付款、部分付款），用于现金流统计
+  receivedAmount: number; // 累计实收（含后续还款分摊），用于欠款计算
   discount: number;
-  extraFee: number; 
+  extraFee: number;
   paymentMethod: PaymentMethod;
   mixedPayments?: { method: PaymentMethod, amount: number }[];
   payee: string;

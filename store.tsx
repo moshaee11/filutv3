@@ -137,6 +137,9 @@ const sanitizeData = (incoming: any): AppData => {
       ...o,
       items: Array.isArray(o.items) ? o.items : [],
       totalAmount: Number(o.totalAmount) || 0,
+      // initialReceivedAmount: 开单时实收；receivedAmount: 累计实收
+      // 老数据迁移：已有 initialReceivedAmount 则保留，否则等于 receivedAmount（即全款/部分款在开单时就收了）
+      initialReceivedAmount: Number(o.initialReceivedAmount) || Number(o.receivedAmount) || 0,
       receivedAmount: Number(o.receivedAmount) || 0,
       discount: Number(o.discount) || 0,
   }));
@@ -422,6 +425,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addOrder = (o: Order) => {
+    // 开单时记录初始实收，用于现金流统计（不含后续还款分摊）
+    const orderWithInitial = { ...o, initialReceivedAmount: o.receivedAmount };
     setData(prev => {
       // 1) 扣库存
       const newProducts = prev.products.map(p => {
@@ -483,7 +488,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev,
         products: newProducts,
         customers: newCustomers,
-        orders: [o, ...prev.orders],
+        orders: [orderWithInitial, ...prev.orders],
         stockLogs: [...newStockLogs, ...prev.stockLogs],
         opLogs: [opLog, ...prev.opLogs]
       };

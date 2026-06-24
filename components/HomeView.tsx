@@ -152,21 +152,20 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
     // 2. 今日还款记录
     const repayments = data.repayments.filter(r => new Date(r.date).getTime() >= startOfToday);
     
-    // 3. 计算逻辑优化
     // 今日营收 (只看新单成交)
     const orderAmount = orders.reduce((sum, o) => sum + (o.totalAmount - o.discount), 0);
-    
-    // 订单实收
-    const orderReceived = orders.reduce((sum, o) => sum + o.receivedAmount, 0);
-    
-    // 还款实收
+
+    // 开单时实收（含当日全额/部分付款，不含后续还款分摊）
+    const orderInitialReceived = orders.reduce((sum, o) => sum + (o.initialReceivedAmount || o.receivedAmount), 0);
+
+    // 还款实收（后续收款）
     const repaymentReceived = repayments.reduce((sum, r) => sum + r.amount, 0);
-    
-    // 今日总入账 (现金流) = 订单实收 + 还款实收
-    const totalReceived = orderReceived + repaymentReceived;
-    
-    // 欠款增加量 = 实际成交价 - 订单实收
-    const debtAmount = orderAmount - orderReceived;
+
+    // 今日总入账 = 开单实收 + 还款实收（不重复计算）
+    const totalReceived = orderInitialReceived + repaymentReceived;
+
+    // 欠款增加量 = 实际成交价 - 开单时实收
+    const debtAmount = orderAmount - orderInitialReceived;
     
     const activeBatches = data.batches.filter(b => !b.isClosed).length;
     
