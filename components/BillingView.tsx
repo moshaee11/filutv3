@@ -156,12 +156,15 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const filteredProducts = useMemo(() => {
     let products = data.products;
 
-    // 1. Filter by Batch
+    // 1. 过滤已删除的商品
+    products = products.filter(p => !p.isDeleted);
+
+    // 2. Filter by Batch
     if (selectedBatchId !== 'ALL') {
       products = products.filter(p => p.batchId === selectedBatchId);
     }
 
-    // 2. Filter by Search
+    // 3. Filter by Search
     if (search) {
       products = products.filter(p => p.name.includes(search) || p.category.includes(search));
     }
@@ -171,7 +174,7 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
 
   const filteredCustomers = useMemo(() => {
     return data.customers.filter(c => 
-      c.name.includes(customerSearchQuery) || (c.phone && c.phone.includes(customerSearchQuery))
+      !c.isDeleted && (c.name.includes(customerSearchQuery) || (c.phone && c.phone.includes(customerSearchQuery)))
     );
   }, [data.customers, customerSearchQuery]);
 
@@ -271,14 +274,6 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     
     if (!hasManualSubtotal && qty <= 0) { alert('请输入有效的件数或总金额'); return; }
 
-    // === 库存预警逻辑 (非阻塞) ===
-    if (qty > 0 && qty > selectedProduct.stockQty) {
-        setToast({
-            msg: `⚠️ 注意：库存不足 (余${selectedProduct.stockQty})，将产生负库存`,
-            type: 'warning'
-        });
-    }
-
     let net = 0;
     let calculatedSubtotal = 0;
     const tare = selectedProduct.defaultTare || 0;
@@ -287,8 +282,20 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
     if (selectedProduct.pricingMode === PricingMode.WEIGHT) {
       net = Math.max(0, preciseCalc(() => gross - (qty * tare)));
       calculatedSubtotal = preciseCalc(() => net * price);
+      
+      // === 库存强拦截：按斤计价 ===
+      if (net > 0 && net > selectedProduct.stockWeight) {
+        alert(`❌ ${selectedProduct.name} 库存不足\n\n剩余 ${selectedProduct.stockWeight} 斤\n需求 ${net} 斤\n\n无法添加到购物车！`);
+        return;
+      }
     } else {
       calculatedSubtotal = preciseCalc(() => qty * price);
+      
+      // === 库存强拦截：按件计价 ===
+      if (qty > 0 && qty > selectedProduct.stockQty) {
+        alert(`❌ ${selectedProduct.name} 库存不足\n\n剩余 ${selectedProduct.stockQty} 件\n需求 ${qty} 件\n\n无法添加到购物车！`);
+        return;
+      }
     }
 
     // Request 1: 计算金额的时候不要小数点后面的，只要整数
@@ -355,8 +362,50 @@ const BillingView: React.FC<BillingViewProps> = ({ onBackToHome }) => {
   const handleFinishOrder = () => {
     if (cart.length === 0) return;
     
+    // === 库存最后一道防线：结算前再次校验 ===
+    const stockCheckIssues: string[] = [];
+    const productStockMap = new Map<string, { totalQty: number; totalWeight: number; product: Product }>();
+    
+    // 汇总购物车中每个商品的总需求量
+    cart.forEach(item => {
+      const existing = productStockMap.get(item.productId);
+      if (existing) {
+        existing.totalQty = preciseCalc(() => existing.totalQty + item.qty);
+        existing.totalWeight = preciseCalc(() => existing.totalWeight + item.netWeight);
+      } else {
+        const product = data.products.find(p => p.id === item.productId);
+        if (product) {
+          productStockMap.set(item.productId, {
+            totalQty: item.qty,
+            totalWeight: item.netWeight,
+            product
+          });
+        }
+      }
+    });
+    
+    // 检查每个商品库存是否足够
+    productStockMap.forEach((value, productId) => {
+      const { totalQty, totalWeight, product } = value;
+      
+      if (product.pricingMode === PricingMode.WEIGHT) {
+        if (totalWeight > product.stockWeight) {
+          stockCheckIssues.push(`${product.name}: 剩余 ${product.stockWeight} 斤，需求 ${totalWeight} 斤`);
+        }
+      } else {
+        if (totalQty > product.stockQty) {
+          stockCheckIssues.push(`${product.name}: 剩余 ${product.stockQty} 件，需求 ${totalQty} 件`);
+        }
+      }
+    });
+    
+    if (stockCheckIssues.length > 0) {
+      alert(`❌ 库存不足，无法完成开单！\n\n${stockCheckIssues.join('\n')}\n\n请先调整购物车或补充库存。`);
+      return;
+    }
+    
     if (!isRounding && receivedVal < estimatedReceivable && selectedCustomerId === 'guest') {
-      alert('❌ 散客不能欠款！\n\n请选择具体客户，或者开启“抹零”将剩余金额免除。');
+      alert('❌ 散客不能欠款！\n\n请选择具体客户，或者开启"抹零"将剩余金额免除。');
       return;
     }
 

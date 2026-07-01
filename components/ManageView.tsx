@@ -293,6 +293,11 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
   const [newPayeeName, setNewPayeeName] = useState('');
   const [debtRiskFilter, setDebtRiskFilter] = useState<DebtRiskLevel | 'ALL'>('ALL');
 
+  // 问题8修复：分页状态
+  const [historyDisplayCount, setHistoryDisplayCount] = useState(50);
+  const [stockLogDisplayCount, setStockLogDisplayCount] = useState(50);
+  const [opLogDisplayCount, setOpLogDisplayCount] = useState(50);
+
   // Order Edit State
   const [isEditingOrder, setIsEditingOrder] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -780,7 +785,7 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
 
   const filteredInventory = useMemo(() => {
     return data.products.filter(p => {
-        if (!p || !p.name) return false;
+        if (!p || !p.name || p.isDeleted) return false;
         const matchSearch = p.name.includes(invSearch);
         const matchBatch = filterBatchId === 'ALL' || p.batchId === filterBatchId;
         return matchSearch && matchBatch;
@@ -1298,7 +1303,7 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
             } else {
                 setSubView('main');
             }
-        }} 
+        }}
         searchProps={{ value: orderSearch, onChange: setOrderSearch, placeholder: '搜索单号或客户...' }}
         batchSelectorProps={{ selectedBatchId: filterBatchId, onSelectBatch: setFilterBatchId, batches: activeBatches }}
         headerRight={
@@ -1321,7 +1326,12 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
             </button>
         }
       >
-        {combinedHistory.length > 0 ? combinedHistory.map((item: any) => {
+        {(() => {
+          // 问题8修复：分页逻辑
+          const visibleHistory = combinedHistory.slice(0, historyDisplayCount);
+          return (
+            <>
+              {visibleHistory.length > 0 ? visibleHistory.map((item: any) => {
              // ... Repayment Logic ...
              if (item.type === 'repayment') {
                  const rep = item as Repayment;
@@ -1427,6 +1437,17 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
                 <p className="font-bold text-sm">没有找到相关记录</p>
             </div>
         )}
+        {combinedHistory.length > historyDisplayCount && (
+          <button 
+            onClick={() => setHistoryDisplayCount(prev => prev + 50)}
+            className="w-full py-3 text-emerald-600 text-sm font-medium hover:bg-emerald-50 rounded-xl transition-all"
+          >
+            加载更多（还剩 {combinedHistory.length - historyDisplayCount} 条）
+          </button>
+        )}
+            </>
+          );
+        })()}
       </SubViewShell>
     );
   }
@@ -2659,61 +2680,77 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
               onBack={() => setSubView('inventory')}
               searchProps={{ value: stockLogSearch, onChange: setStockLogSearch, placeholder: '搜索商品名称...' }}
           >
-              {filteredStockLogs.length > 0 ? filteredStockLogs.map(log => {
-                  const typeInfo = stockLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100' };
-                  const isPositive = log.qtyChange > 0;
-                  return (
-                      <div key={log.id} className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-50">
-                          <div className="flex justify-between items-start mb-3">
-                              <div className="flex items-center gap-2">
-                                  <h3 className="font-black text-gray-800">{log.productName}</h3>
-                                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
-                                      {typeInfo.label}
-                                  </span>
-                              </div>
-                              <p className="text-[10px] text-gray-400 font-mono text-right">
-                                  {new Date(log.createdAt).toLocaleString()}
-                              </p>
-                          </div>
-                          <div className="grid grid-cols-3 gap-3 text-center">
-                              <div className="bg-gray-50 p-3 rounded-xl">
-                                  <p className="text-[10px] text-gray-400 font-bold">数量变化</p>
-                                  <p className={`font-black text-sm mt-1 ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
-                                      {isPositive ? '+' : ''}{log.qtyChange.toLocaleString()}
-                                  </p>
-                              </div>
-                              <div className="bg-gray-50 p-3 rounded-xl">
-                                  <p className="text-[10px] text-gray-400 font-bold">重量变化</p>
-                                  <p className={`font-black text-sm mt-1 ${log.weightChange > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                      {log.weightChange > 0 ? '+' : ''}{log.weightChange.toFixed(1)}斤
-                                  </p>
-                              </div>
-                              <div className="bg-gray-50 p-3 rounded-xl">
-                                  <p className="text-[10px] text-gray-400 font-bold">结存数量</p>
-                                  <p className="font-black text-sm mt-1 text-gray-800">{log.qtyAfter.toLocaleString()}</p>
-                              </div>
-                          </div>
-                          {log.reason && (
-                              <div className="mt-3 pt-3 border-t border-gray-50">
-                                  <p className="text-xs text-gray-500 font-bold">
-                                      <span className="text-gray-400">原因:</span> {log.reason}
-                                  </p>
-                              </div>
-                          )}
-                          {log.operator && (
-                              <p className="text-[10px] text-gray-400 font-bold mt-1">
-                                  操作人: {log.operator}
-                              </p>
-                          )}
-                      </div>
-                  );
-              }) : (
-                  <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
-                      <ClipboardEdit size={48} strokeWidth={1} className="opacity-20"/>
-                      <p className="font-bold text-sm">暂无库存流水记录</p>
-                      <p className="text-xs text-gray-300">开单或调整库存后会在这里显示</p>
-                  </div>
-              )}
+              {(() => {
+                // 问题8修复：分页逻辑
+                const visibleLogs = filteredStockLogs.slice(0, stockLogDisplayCount);
+                return (
+                  <>
+                    {visibleLogs.length > 0 ? visibleLogs.map(log => {
+                        const typeInfo = stockLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100' };
+                        const isPositive = log.qtyChange > 0;
+                        return (
+                            <div key={log.id} className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-gray-50">
+                                <div className="flex justify-between items-start mb-3">
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="font-black text-gray-800">{log.productName}</h3>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
+                                            {typeInfo.label}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 font-mono text-right">
+                                        {new Date(log.createdAt).toLocaleString()}
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-3 gap-3 text-center">
+                                    <div className="bg-gray-50 p-3 rounded-xl">
+                                        <p className="text-[10px] text-gray-400 font-bold">数量变化</p>
+                                        <p className={`font-black text-sm mt-1 ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
+                                            {isPositive ? '+' : ''}{log.qtyChange.toLocaleString()}
+                                        </p>
+                                    </div>
+                                    <div className="bg-gray-50 p-3 rounded-xl">
+                                        <p className="text-[10px] text-gray-400 font-bold">重量变化</p>
+                                        <p className={`font-black text-sm mt-1 ${log.weightChange > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                            {log.weightChange > 0 ? '+' : ''}{log.weightChange.toFixed(1)}斤
+                                        </p>
+                                    </div>
+                                    <div className="bg-gray-50 p-3 rounded-xl">
+                                        <p className="text-[10px] text-gray-400 font-bold">结存数量</p>
+                                        <p className="font-black text-sm mt-1 text-gray-800">{log.qtyAfter.toLocaleString()}</p>
+                                    </div>
+                                </div>
+                                {log.reason && (
+                                    <div className="mt-3 pt-3 border-t border-gray-50">
+                                        <p className="text-xs text-gray-500 font-bold">
+                                            <span className="text-gray-400">原因:</span> {log.reason}
+                                        </p>
+                                    </div>
+                                )}
+                                {log.operator && (
+                                    <p className="text-[10px] text-gray-400 font-bold mt-1">
+                                        操作人: {log.operator}
+                                    </p>
+                                )}
+                            </div>
+                        );
+                    }) : (
+                        <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                            <ClipboardEdit size={48} strokeWidth={1} className="opacity-20"/>
+                            <p className="font-bold text-sm">暂无库存流水记录</p>
+                            <p className="text-xs text-gray-300">开单或调整库存后会在这里显示</p>
+                        </div>
+                    )}
+                    {filteredStockLogs.length > stockLogDisplayCount && (
+                      <button 
+                        onClick={() => setStockLogDisplayCount(prev => prev + 50)}
+                        className="w-full py-3 text-emerald-600 text-sm font-medium hover:bg-emerald-50 rounded-xl transition-all"
+                      >
+                        加载更多（还剩 {filteredStockLogs.length - stockLogDisplayCount} 条）
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
           </SubViewShell>
       );
   }
@@ -2764,75 +2801,91 @@ const ManageView: React.FC<{ initialSubView?: string; onSubViewChange?: (view: s
               </div>
 
               <div className="flex-1 p-4 pb-32 overflow-y-auto no-scrollbar space-y-3">
-                  {filteredOpLogs.length > 0 ? filteredOpLogs.map(log => {
-                      const typeInfo = opLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100', icon: '📝' };
-                      const isExpanded = expandedOpLogId === log.id;
-                      const hasSnapshot = log.beforeSnapshot || log.afterSnapshot;
+                  {(() => {
+                    // 问题8修复：分页逻辑
+                    const visibleLogs = filteredOpLogs.slice(0, opLogDisplayCount);
+                    return (
+                      <>
+                        {visibleLogs.length > 0 ? visibleLogs.map(log => {
+                            const typeInfo = opLogTypeMap[log.type] || { label: log.type, color: 'text-gray-600', bg: 'bg-gray-100', icon: '📝' };
+                            const isExpanded = expandedOpLogId === log.id;
+                            const hasSnapshot = log.beforeSnapshot || log.afterSnapshot;
 
-                      return (
-                          <div key={log.id} className="bg-white rounded-[1.5rem] shadow-sm border border-gray-50 overflow-hidden">
-                              <div
-                                  onClick={() => hasSnapshot && setExpandedOpLogId(isExpanded ? null : log.id)}
-                                  className={`p-4 ${hasSnapshot ? 'cursor-pointer active:bg-gray-50' : ''}`}
-                              >
-                                  <div className="flex justify-between items-start mb-2">
-                                      <div className="flex items-center gap-2">
-                                          <span className="text-lg">{typeInfo.icon}</span>
-                                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
-                                              {typeInfo.label}
-                                          </span>
-                                      </div>
-                                      <p className="text-[10px] text-gray-400 font-mono text-right">
-                                          {new Date(log.createdAt).toLocaleString()}
-                                      </p>
-                                  </div>
-                                  <p className="text-sm font-bold text-gray-800 leading-relaxed">{log.description}</p>
-                                  {log.operator && (
-                                      <p className="text-[10px] text-gray-400 font-bold mt-1">
-                                          操作人: {log.operator}
-                                      </p>
-                                  )}
-                                  {hasSnapshot && (
-                                      <div className="flex items-center gap-1 mt-2 text-xs text-gray-400 font-bold">
-                                          {isExpanded ? '收起详情' : '点击查看详情'}
-                                          <ChevronRight size={14} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-                                      </div>
-                                  )}
-                              </div>
+                            return (
+                                <div key={log.id} className="bg-white rounded-[1.5rem] shadow-sm border border-gray-50 overflow-hidden">
+                                    <div
+                                        onClick={() => hasSnapshot && setExpandedOpLogId(isExpanded ? null : log.id)}
+                                        className={`p-4 ${hasSnapshot ? 'cursor-pointer active:bg-gray-50' : ''}`}
+                                    >
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-lg">{typeInfo.icon}</span>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${typeInfo.bg} ${typeInfo.color}`}>
+                                                    {typeInfo.label}
+                                                </span>
+                                            </div>
+                                            <p className="text-[10px] text-gray-400 font-mono text-right">
+                                                {new Date(log.createdAt).toLocaleString()}
+                                            </p>
+                                        </div>
+                                        <p className="text-sm font-bold text-gray-800 leading-relaxed">{log.description}</p>
+                                        {log.operator && (
+                                            <p className="text-[10px] text-gray-400 font-bold mt-1">
+                                                操作人: {log.operator}
+                                            </p>
+                                        )}
+                                        {hasSnapshot && (
+                                            <div className="flex items-center gap-1 mt-2 text-xs text-gray-400 font-bold">
+                                                {isExpanded ? '收起详情' : '点击查看详情'}
+                                                <ChevronRight size={14} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                                            </div>
+                                        )}
+                                    </div>
 
-                              {isExpanded && hasSnapshot && (
-                                  <div className="bg-gray-50 p-4 border-t border-gray-100 space-y-3 animate-in fade-in">
-                                      {log.beforeSnapshot && (
-                                          <div>
-                                              <p className="text-[10px] font-black text-gray-400 uppercase mb-2">修改前</p>
-                                              <div className="bg-white p-3 rounded-xl border border-gray-100">
-                                                  <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap break-all">
-                                                      {JSON.stringify(log.beforeSnapshot, null, 2)}
-                                                  </pre>
-                                              </div>
-                                          </div>
-                                      )}
-                                      {log.afterSnapshot && (
-                                          <div>
-                                              <p className="text-[10px] font-black text-emerald-600 uppercase mb-2">修改后</p>
-                                              <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-                                                  <pre className="text-xs text-emerald-700 font-mono whitespace-pre-wrap break-all">
-                                                      {JSON.stringify(log.afterSnapshot, null, 2)}
-                                                  </pre>
-                                              </div>
-                                          </div>
-                                      )}
-                                  </div>
-                              )}
-                          </div>
-                      );
-                  }) : (
-                      <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
-                          <ClipboardCheck size={48} strokeWidth={1} className="opacity-20"/>
-                          <p className="font-bold text-sm">暂无操作日志</p>
-                          <p className="text-xs text-gray-300">系统操作记录会在这里显示</p>
-                      </div>
-                  )}
+                                    {isExpanded && hasSnapshot && (
+                                        <div className="bg-gray-50 p-4 border-t border-gray-100 space-y-3 animate-in fade-in">
+                                            {log.beforeSnapshot && (
+                                                <div>
+                                                    <p className="text-[10px] font-black text-gray-400 uppercase mb-2">修改前</p>
+                                                    <div className="bg-white p-3 rounded-xl border border-gray-100">
+                                                        <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap break-all">
+                                                            {JSON.stringify(log.beforeSnapshot, null, 2)}
+                                                        </pre>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {log.afterSnapshot && (
+                                                <div>
+                                                    <p className="text-[10px] font-black text-emerald-600 uppercase mb-2">修改后</p>
+                                                    <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                                                        <pre className="text-xs text-emerald-700 font-mono whitespace-pre-wrap break-all">
+                                                            {JSON.stringify(log.afterSnapshot, null, 2)}
+                                                        </pre>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }) : (
+                            <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-2">
+                                <ClipboardCheck size={48} strokeWidth={1} className="opacity-20"/>
+                                <p className="font-bold text-sm">暂无操作日志</p>
+                                <p className="text-xs text-gray-300">系统操作记录会在这里显示</p>
+                            </div>
+                        )}
+                        {filteredOpLogs.length > opLogDisplayCount && (
+                          <button 
+                            onClick={() => setOpLogDisplayCount(prev => prev + 50)}
+                            className="w-full py-3 text-emerald-600 text-sm font-medium hover:bg-emerald-50 rounded-xl transition-all"
+                          >
+                            加载更多（还剩 {filteredOpLogs.length - opLogDisplayCount} 条）
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
               </div>
           </div>
       );

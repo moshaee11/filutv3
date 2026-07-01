@@ -445,6 +445,10 @@ const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [balanceRange, setBalanceRange] = useState<'today' | 'week' | 'month'>('today');
   const [expenseForm, setExpenseForm] = useState({ amount: '', type: '', note: '' });
+  
+  // 问题8修复：分页状态
+  const [revenueDisplayCount, setRevenueDisplayCount] = useState(50);
+  const [expenseDisplayCount, setExpenseDisplayCount] = useState(50);
 
   useEffect(() => {
     const today = new Date();
@@ -766,6 +770,57 @@ const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
         
         {/* Filters */}
         <div className="space-y-3">
+             {/* 问题7修复：快捷日期按钮组 */}
+             <div className="flex gap-2 mb-2">
+               <button 
+                 onClick={() => {
+                   const today = new Date();
+                   const todayStr = today.toISOString().slice(0, 10);
+                   setDateRange({ start: todayStr, end: todayStr });
+                 }}
+                 className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-200 transition-all"
+               >
+                 今天
+               </button>
+               <button 
+                 onClick={() => {
+                   const yesterday = new Date();
+                   yesterday.setDate(yesterday.getDate() - 1);
+                   const yesterdayStr = yesterday.toISOString().slice(0, 10);
+                   setDateRange({ start: yesterdayStr, end: yesterdayStr });
+                 }}
+                 className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-200 transition-all"
+               >
+                 昨天
+               </button>
+               <button 
+                 onClick={() => {
+                   const today = new Date();
+                   const day = today.getDay();
+                   const diff = today.getDate() - day + (day === 0 ? -6 : 1); // 周一
+                   const monday = new Date(today);
+                   monday.setDate(diff);
+                   const mondayStr = monday.toISOString().slice(0, 10);
+                   const todayStr = today.toISOString().slice(0, 10);
+                   setDateRange({ start: mondayStr, end: todayStr });
+                 }}
+                 className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-200 transition-all"
+               >
+                 本周
+               </button>
+               <button 
+                 onClick={() => {
+                   const today = new Date();
+                   const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+                   const firstDayStr = firstDay.toISOString().slice(0, 10);
+                   const todayStr = today.toISOString().slice(0, 10);
+                   setDateRange({ start: firstDayStr, end: todayStr });
+                 }}
+                 className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-200 transition-all"
+               >
+                 本月
+               </button>
+             </div>
              <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-100">
                 <Calendar size={16} className="text-slate-400 ml-2" />
                 <input 
@@ -1063,61 +1118,93 @@ const BusinessView: React.FC<BusinessViewProps> = ({ onGoToReconcile }) => {
             </header>
             <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-32 no-scrollbar">
                 {activeDetail === 'revenue' ? (
-                     filteredData.orders.length > 0 ? filteredData.orders.map(o => (
-                         <div key={o.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50">
-                             <div className="flex justify-between items-center mb-1">
-                                <span className="font-black text-gray-800">{o.customerName}</span>
-                                <span className="text-emerald-600 font-black">
-                                    ¥{filterMethod === 'ALL' 
-                                        ? (o.totalAmount - o.discount).toLocaleString() 
-                                        : (o.paymentMethod === filterMethod 
+                     (() => {
+                       // 问题8修复：分页逻辑
+                       const visibleOrders = filteredData.orders.slice(0, revenueDisplayCount);
+                       return (
+                         <>
+                           {visibleOrders.length > 0 ? visibleOrders.map(o => (
+                             <div key={o.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50">
+                                 <div className="flex justify-between items-center mb-1">
+                                    <span className="font-black text-gray-800">{o.customerName}</span>
+                                    <span className="text-emerald-600 font-black">
+                                        ¥{filterMethod === 'ALL' 
                                             ? (o.totalAmount - o.discount).toLocaleString() 
-                                            : (o.mixedPayments?.find(m => m.method === filterMethod)?.amount || 0).toLocaleString())}
-                                </span>
-                             </div>
-                             <div className="text-xs text-gray-400 mb-2">
-                                {o.items.map(i => `${i.productName}x${i.qty}`).join(', ')}
-                             </div>
-                             <div className="flex justify-between text-[10px] text-gray-400 font-bold uppercase items-center">
-                                <span>{o.orderNo}</span>
-                                <span className="flex items-center gap-1">
-                                    <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-500">{o.payee}</span>
-                                    <span>{new Date(o.createdAt).toLocaleString()}</span>
-                                </span>
-                             </div>
-                             {o.discount > 0 && (
-                                 <div className="mt-2 text-[10px] text-orange-400 font-bold bg-orange-50 p-1.5 rounded inline-block">
-                                     已优惠/抹零: ¥{o.discount}
+                                            : (o.paymentMethod === filterMethod 
+                                                ? (o.totalAmount - o.discount).toLocaleString() 
+                                                : (o.mixedPayments?.find(m => m.method === filterMethod)?.amount || 0).toLocaleString())}
+                                    </span>
                                  </div>
-                             )}
-                         </div>
-                     )) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>
+                                 <div className="text-xs text-gray-400 mb-2">
+                                    {o.items.map(i => `${i.productName}x${i.qty}`).join(', ')}
+                                 </div>
+                                 <div className="flex justify-between text-[10px] text-gray-400 font-bold uppercase items-center">
+                                    <span>{o.orderNo}</span>
+                                    <span className="flex items-center gap-1">
+                                        <span className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-500">{o.payee}</span>
+                                        <span>{new Date(o.createdAt).toLocaleString()}</span>
+                                    </span>
+                                 </div>
+                                 {o.discount > 0 && (
+                                     <div className="mt-2 text-[10px] text-orange-400 font-bold bg-orange-50 p-1.5 rounded inline-block">
+                                         已优惠/抹零: ¥{o.discount}
+                                     </div>
+                                 )}
+                             </div>
+                           )) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>}
+                           {filteredData.orders.length > revenueDisplayCount && (
+                             <button 
+                               onClick={() => setRevenueDisplayCount(prev => prev + 50)}
+                               className="w-full py-3 text-emerald-600 text-sm font-medium hover:bg-emerald-50 rounded-xl transition-all"
+                             >
+                               加载更多（还剩 {filteredData.orders.length - revenueDisplayCount} 条）
+                             </button>
+                           )}
+                         </>
+                       );
+                     })()
                 ) : (
-                     filteredData.expenses.length > 0 ? filteredData.expenses.map(e => {
-                        const category = EXPENSE_CATEGORIES.includes(e.type) ? e.type : '其他';
-                        const tagColors: Record<string, string> = {
-                            '运费': 'bg-blue-50 text-blue-600 border-blue-100',
-                            '人工': 'bg-emerald-50 text-emerald-600 border-emerald-100',
-                            '包装': 'bg-purple-50 text-purple-600 border-purple-100',
-                            '损耗': 'bg-red-50 text-red-600 border-red-100',
-                            '其他': 'bg-gray-50 text-gray-600 border-gray-100'
-                        };
-                        return (
-                            <div key={e.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${tagColors[category] || tagColors['其他']}`}>
-                                            {category}
-                                        </span>
-                                    </div>
-                                    <p className="font-black text-gray-800">{e.type}</p>
-                                    <p className="text-[10px] text-gray-400 font-bold">{new Date(e.date).toLocaleString()}</p>
-                                    {e.note && <p className="text-[10px] text-gray-400">备注: {e.note}</p>}
-                                </div>
-                                <p className="font-black text-xl text-orange-500">-¥{e.amount.toLocaleString()}</p>
-                            </div>
-                        );
-                     }) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>
+                     (() => {
+                       // 问题8修复：分页逻辑
+                       const visibleExpenses = filteredData.expenses.slice(0, expenseDisplayCount);
+                       return (
+                         <>
+                           {visibleExpenses.length > 0 ? visibleExpenses.map(e => {
+                              const category = EXPENSE_CATEGORIES.includes(e.type) ? e.type : '其他';
+                              const tagColors: Record<string, string> = {
+                                  '运费': 'bg-blue-50 text-blue-600 border-blue-100',
+                                  '人工': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+                                  '包装': 'bg-purple-50 text-purple-600 border-purple-100',
+                                  '损耗': 'bg-red-50 text-red-600 border-red-100',
+                                  '其他': 'bg-gray-50 text-gray-600 border-gray-100'
+                              };
+                              return (
+                                  <div key={e.id} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-50 flex justify-between items-center">
+                                      <div className="space-y-2">
+                                          <div className="flex items-center gap-2">
+                                              <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${tagColors[category] || tagColors['其他']}`}>
+                                                  {category}
+                                              </span>
+                                          </div>
+                                          <p className="font-black text-gray-800">{e.type}</p>
+                                          <p className="text-[10px] text-gray-400 font-bold">{new Date(e.date).toLocaleString()}</p>
+                                          {e.note && <p className="text-[10px] text-gray-400">备注: {e.note}</p>}
+                                      </div>
+                                      <p className="font-black text-xl text-orange-500">-¥{e.amount.toLocaleString()}</p>
+                                  </div>
+                              );
+                           }) : <div className="text-center py-20 text-gray-400 font-bold">无记录</div>}
+                           {filteredData.expenses.length > expenseDisplayCount && (
+                             <button 
+                               onClick={() => setExpenseDisplayCount(prev => prev + 50)}
+                               className="w-full py-3 text-emerald-600 text-sm font-medium hover:bg-emerald-50 rounded-xl transition-all"
+                             >
+                               加载更多（还剩 {filteredData.expenses.length - expenseDisplayCount} 条）
+                             </button>
+                           )}
+                         </>
+                       );
+                     })()
                 )}
             </div>
          </div>

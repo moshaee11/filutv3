@@ -144,7 +144,7 @@ export const getCustomerPurchaseStats = (
     const statsMap = new Map<string, CustomerPurchaseStat>();
 
     customers.forEach(c => {
-        if (!c.isGuest) {
+        if (!c.isGuest && !c.isDeleted) {
             statsMap.set(c.id, {
                 customerId: c.id,
                 customerName: c.name,
@@ -194,7 +194,7 @@ export const getCustomerDebtStats = (
     orders: Order[],
     repayments: Repayment[]
 ): CustomerDebtStat[] => {
-    const debtCustomers = customers.filter(c => !c.isGuest && c.totalDebt > 0);
+    const debtCustomers = customers.filter(c => !c.isGuest && !c.isDeleted && c.totalDebt > 0);
 
     return debtCustomers.map(customer => {
         const customerOrders = orders.filter(

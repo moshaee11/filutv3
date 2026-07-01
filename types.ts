@@ -50,6 +50,8 @@ export interface Product {
   sellingPrice?: number;
   lowStockThreshold?: number;
   unitWeight?: number; // 新增：单件标准重量 (用于按件计价时的成本分摊)
+  isDeleted?: boolean; // 软删除标记
+  deletedAt?: string; // 删除时间
 }
 
 export interface Batch {
@@ -117,6 +119,8 @@ export interface Customer {
   totalDebt: number;
   isGuest: boolean;
   createdAt?: string;
+  isDeleted?: boolean; // 软删除标记
+  deletedAt?: string; // 删除时间
 }
 
 export interface Expense {

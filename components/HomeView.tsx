@@ -59,12 +59,12 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
   }, [isEmptyData]);
 
   const totalDebtAmount = useMemo(() => 
-    data.customers.reduce((sum, c) => sum + (c.totalDebt || 0), 0)
+    data.customers.filter(c => !c.isDeleted).reduce((sum, c) => sum + (c.totalDebt || 0), 0)
   , [data.customers]);
 
   const overdueCustomers = useMemo(() => {
     const result: { customer: Customer; debtAge: number }[] = [];
-    data.customers.forEach(c => {
+    data.customers.filter(c => !c.isDeleted).forEach(c => {
       if (c.isGuest || c.totalDebt <= 0) return;
       const debtAge = getCustomerDebtAge(c.id, data.orders);
       if (debtAge > 15) {
@@ -128,7 +128,7 @@ const HomeView: React.FC<{ onStartBilling: () => void; onGoToReconcile: () => vo
       .slice(0, 5);
 
     const topDebtCustomers = data.customers
-      .filter(c => !c.isGuest && c.totalDebt > 0)
+      .filter(c => !c.isDeleted && !c.isGuest && c.totalDebt > 0)
       .sort((a, b) => b.totalDebt - a.totalDebt)
       .slice(0, 5);
 
@@ -490,7 +490,7 @@ const QuickModal: React.FC<{
 
   const overdueCustomers = useMemo(() => {
     const result: { customer: Customer; debtAge: number }[] = [];
-    data.customers.forEach(c => {
+    data.customers.filter(c => !c.isDeleted).forEach(c => {
       if (c.isGuest || c.totalDebt <= 0) return;
       const debtAge = getCustomerDebtAge(c.id, data.orders);
       if (debtAge > 15) {
@@ -513,7 +513,7 @@ const QuickModal: React.FC<{
 
   const customerList = useMemo(() => {
     return data.customers
-      .filter(c => !c.isGuest && c.name.includes(customerSearch))
+      .filter(c => !c.isDeleted && !c.isGuest && c.name.includes(customerSearch))
       .map(c => {
         const lastOrder = data.orders.filter(o => o.customerId === c.id && o.status === OrderStatus.ACTIVE).sort((a,b)=>new Date(b.createdAt).getTime()-new Date(a.createdAt).getTime())[0];
         const lastDateObj = lastOrder ? new Date(lastOrder.createdAt) : null;

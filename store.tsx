@@ -90,6 +90,18 @@ const recalculateAllDebts = (orders: Order[], repayments: Repayment[], customers
   });
 };
 
+// --- 辅助函数：增量重算单个客户欠款 ---
+// 问题6修复：优化性能，避免每次操作都遍历全部订单
+const recalculateCustomerDebt = (customerId: string, orders: Order[], customers: Customer[]): Customer[] => {
+  if (customerId === 'guest') return customers;
+  
+  const debt = orders
+    .filter(o => o.status === OrderStatus.ACTIVE && o.customerId === customerId)
+    .reduce((sum, o) => preciseCalc(() => sum + Math.max(0, o.totalAmount - o.discount - o.receivedAmount)), 0);
+  
+  return customers.map(c => c.id === customerId ? { ...c, totalDebt: Math.max(0, debt) } : c);
+};
+
 const allocateRepaymentToOrders = (orders: Order[], customerId: string, amount: number): Order[] => {
   const customerOrders = orders
     .filter(o => o.status === OrderStatus.ACTIVE && o.customerId === customerId)
@@ -268,7 +280,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteProduct = (id: string) => setData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
   
   const addBatch = (b: Batch) => setData(prev => ({ ...prev, batches: [b, ...prev.batches] }));
-  const updateBatch = (b: Batch) => setData(prev => ({ ...prev, batches: prev.batches.map(old => old.id === b.id ? b : old) }));
+  const updateBatch = (b: Batch) => {
+    // 问题5修复：禁止通过 updateBatch 修改 extraFees
+    // extraFees 必须通过 addExtraFee/removeExtraFee 操作，以确保 expenses 同步
+    if (b.extraFees !== undefined) {
+      console.warn('[updateBatch] 请勿直接修改 extraFees，请使用 addExtraFee/removeExtraFee 操作费用');
+    }
+    setData(prev => {
+      const oldBatch = prev.batches.find(old => old.id === b.id);
+      // 保留原有的 extraFees，忽略传入的 extraFees
+      const preservedExtraFees = oldBatch?.extraFees || [];
+      return {
+        ...prev,
+        batches: prev.batches.map(old => old.id === b.id ? { ...b, extraFees: preservedExtraFees } : old)
+      };
+    });
+  };
   
   const closeBatch = (id: string) => {
     setData(prev => ({
@@ -277,12 +304,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
-  const deleteBatch = (id: string) => setData(prev => ({ 
-    ...prev, 
-    batches: prev.batches.filter(b => b.id !== id), 
-    products: prev.products.filter(p => p.batchId !== id),
-    expenses: prev.expenses.filter(e => e.batchId !== id)
-  }));
+  const deleteBatch = (id: string) => setData(prev => {
+    const now = new Date().toISOString();
+    
+    // 软删除：不物理删除商品，只标记为已删除
+    const updatedProducts = prev.products.map(p => {
+      if (p.batchId === id) {
+        return {
+          ...p,
+          isDeleted: true,
+          deletedAt: now,
+          stockQty: 0,
+          stockWeight: 0,
+          batchId: undefined // 清空batchId
+        };
+      }
+      return p;
+    });
+    
+    return {
+      ...prev,
+      batches: prev.batches.filter(b => b.id !== id),
+      products: updatedProducts,
+      expenses: prev.expenses.filter(e => e.batchId !== id)
+    };
+  });
 
   const addExtraFee = (batchId: string, fee: ExtraFeeItem) => {
     setData(prev => ({ ...prev, batches: prev.batches.map(b => b.id === batchId ? { ...b, extraFees: [...b.extraFees, fee] } : b) }));
@@ -348,6 +394,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const target = prev.customers.find(c => c.id === id);
       if (!target || target.isGuest) return prev;
 
+      // 检查客户是否有欠款
+      if (target.totalDebt > 0) {
+        alert(`❌ 该客户还有 ¥${target.totalDebt} 欠款，无法删除！\n请先回收欠款后再删除。`);
+        return prev;
+      }
+
+      // 软删除：不物理删除客户，只标记为已删除
+      const now = new Date().toISOString();
+      const updatedCustomers = prev.customers.map(c => {
+        if (c.id === id) {
+          return {
+            ...c,
+            isDeleted: true,
+            deletedAt: now,
+            totalDebt: 0
+          };
+        }
+        return c;
+      });
+
       const opLog: OpLog = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         type: 'CUSTOMER_EDIT',
@@ -358,7 +424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return {
         ...prev,
-        customers: prev.customers.filter(c => c.id !== id),
+        customers: updatedCustomers,
         opLogs: [opLog, ...prev.opLogs]
       };
     });
@@ -418,6 +484,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const oldOrders = data.orders.filter(o => new Date(o.createdAt).getTime() < cutoffTime);
       const oldRepayments = data.repayments.filter(r => new Date(r.date).getTime() < cutoffTime);
       const oldExpenses = data.expenses.filter(e => new Date(e.date).getTime() < cutoffTime);
+      const oldStockLogs = data.stockLogs.filter(l => new Date(l.createdAt).getTime() < cutoffTime);
+      const oldOpLogs = data.opLogs.filter(l => new Date(l.createdAt).getTime() < cutoffTime);
 
       if (oldOrders.length === 0 && oldRepayments.length === 0 && oldExpenses.length === 0) {
           alert('没有符合条件的历史数据需要归档。');
@@ -430,21 +498,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           range: `Before ${cutoffDate.toLocaleDateString()}`,
           orders: oldOrders,
           repayments: oldRepayments,
-          expenses: oldExpenses
+          expenses: oldExpenses,
+          stockLogs: oldStockLogs,
+          opLogs: oldOpLogs
       };
 
       // 下载文件
       downloadJSON(archivePayload, `归档数据_${cutoffDate.toISOString().split('T')[0]}前.json`);
 
-      // 从主数据中移除
-      setData(prev => ({
-          ...prev,
-          orders: prev.orders.filter(o => new Date(o.createdAt).getTime() >= cutoffTime),
-          repayments: prev.repayments.filter(r => new Date(r.date).getTime() >= cutoffTime),
-          expenses: prev.expenses.filter(e => new Date(e.date).getTime() >= cutoffTime)
-      }));
+      // 从主数据中移除，并在删除前执行回退操作
+      setData(prev => {
+          // 1. 回退库存：只处理ACTIVE状态的订单
+          const activeOldOrders = oldOrders.filter(o => o.status === OrderStatus.ACTIVE);
+          
+          let newProducts = prev.products;
+          const archiveStockLogs: StockLog[] = [];
+          
+          if (activeOldOrders.length > 0) {
+              newProducts = prev.products.map(p => {
+                  let totalQtyToAdd = 0;
+                  let totalWeightToAdd = 0;
+                  
+                  activeOldOrders.forEach(order => {
+                      const item = order.items.find(i => i.productId === p.id);
+                      if (item) {
+                          totalQtyToAdd = preciseCalc(() => totalQtyToAdd + item.qty);
+                          totalWeightToAdd = preciseCalc(() => totalWeightToAdd + item.netWeight);
+                      }
+                  });
+                  
+                  if (totalQtyToAdd > 0 || totalWeightToAdd > 0) {
+                      const newQty = preciseCalc(() => p.stockQty + totalQtyToAdd);
+                      const newWeight = preciseCalc(() => p.stockWeight + totalWeightToAdd);
+                      
+                      // 确保不超过初始库存（理论上归档的都是已售出的，不应该超）
+                      const finalQty = Math.min(newQty, p.initialStockQty);
+                      const finalWeight = Math.min(newWeight, p.initialStockWeight);
+                      
+                      // 生成库存流水记录
+                      if (totalQtyToAdd > 0 || totalWeightToAdd > 0) {
+                          archiveStockLogs.push({
+                              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${p.id.slice(-4)}`,
+                              productId: p.id,
+                              productName: p.name,
+                              type: 'RETURN' as const,
+                              qtyChange: totalQtyToAdd,
+                              weightChange: totalWeightToAdd,
+                              qtyAfter: finalQty,
+                              weightAfter: finalWeight,
+                              reason: '归档回退',
+                              createdAt: new Date().toISOString()
+                          });
+                      }
+                      
+                      return {
+                          ...p,
+                          stockQty: finalQty,
+                          stockWeight: finalWeight
+                      };
+                  }
+                  return p;
+              });
+          }
 
-      alert(`✅ 归档成功！\n已将 ${cutoffDate.toLocaleDateString()} 之前的数据导出并清理。\n请妥善保管下载的文件。`);
+          // 2. 回退还款分摊
+          let newOrders = prev.orders;
+          oldRepayments.forEach(repayment => {
+              if (repayment.customerId && repayment.customerId !== 'guest') {
+                  newOrders = rollbackRepaymentFromOrders(newOrders, repayment.customerId, repayment.amount);
+              }
+          });
+
+          // 3. 删除归档数据
+          const remainingOrders = newOrders.filter(o => new Date(o.createdAt).getTime() >= cutoffTime);
+          const remainingRepayments = prev.repayments.filter(r => new Date(r.date).getTime() >= cutoffTime);
+          
+          // 4. 重算客户欠款
+          const newCustomers = recalculateAllDebts(remainingOrders, remainingRepayments, prev.customers);
+
+          return {
+              ...prev,
+              products: newProducts,
+              orders: remainingOrders,
+              repayments: remainingRepayments,
+              expenses: prev.expenses.filter(e => new Date(e.date).getTime() >= cutoffTime),
+              stockLogs: [...archiveStockLogs, ...prev.stockLogs.filter(l => new Date(l.createdAt).getTime() >= cutoffTime)],
+              opLogs: prev.opLogs.filter(l => new Date(l.createdAt).getTime() >= cutoffTime),
+              customers: newCustomers
+          };
+      });
+
+      alert(`✅ 归档成功！\n已将 ${cutoffDate.toLocaleDateString()} 之前的数据导出并清理。\n库存和欠款已自动回退重算。\n请妥善保管下载的文件。`);
   };
 
   const addOrder = (o: Order) => {
@@ -754,7 +898,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newOrders = prev.orders.map(o =>
         o.id === id ? { ...o, ...finalUpdates, updatedAt: new Date().toISOString() } : o
       );
-      const newCustomers = recalculateAllDebts(newOrders, prev.repayments, prev.customers);
+      
+      // 问题6修复：使用增量重算，而非全量重算
+      let newCustomers = prev.customers;
+      const oldCustomerId = before.customerId;
+      const newCustomerId = updates.customerId !== undefined ? updates.customerId : oldCustomerId;
+      
+      // 如果客户变更，需要重算新旧两个客户；否则只重算原客户
+      if (oldCustomerId !== newCustomerId) {
+        newCustomers = recalculateCustomerDebt(oldCustomerId, newOrders, newCustomers);
+        if (newCustomerId !== 'guest') {
+          newCustomers = recalculateCustomerDebt(newCustomerId, newOrders, newCustomers);
+        }
+      } else if (oldCustomerId !== 'guest') {
+        newCustomers = recalculateCustomerDebt(oldCustomerId, newOrders, newCustomers);
+      }
 
       // 操作日志
       let opLog: OpLog | null = null;
@@ -814,7 +972,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       const newRepayments = [normalized, ...prev.repayments];
-      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
+      // 问题6修复：使用增量重算而非全量重算
+      const newCustomers = r.customerId !== 'guest' 
+        ? recalculateCustomerDebt(r.customerId, newOrders, prev.customers)
+        : prev.customers;
 
       // 操作日志
       const opLog: OpLog = {
@@ -855,7 +1016,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newOrders = allocateRepaymentToOrders(newOrders, updatedRepayment.customerId, updatedRepayment.amount);
       }
 
-      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
+      // 问题6修复：使用增量重算，如果客户变更则重算新旧两个客户
+      let newCustomers = prev.customers;
+      const oldCustomerId = before.customerId;
+      const newCustomerId = updatedRepayment?.customerId || oldCustomerId;
+      
+      if (oldCustomerId !== newCustomerId) {
+        if (oldCustomerId !== 'guest') {
+          newCustomers = recalculateCustomerDebt(oldCustomerId, newOrders, newCustomers);
+        }
+        if (newCustomerId !== 'guest') {
+          newCustomers = recalculateCustomerDebt(newCustomerId, newOrders, newCustomers);
+        }
+      } else if (oldCustomerId !== 'guest') {
+        newCustomers = recalculateCustomerDebt(oldCustomerId, newOrders, newCustomers);
+      }
 
       // 操作日志
       let opLog: OpLog | null = null;
@@ -898,7 +1073,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       
       const newRepayments = prev.repayments.filter(r => r.id !== id);
-      const newCustomers = recalculateAllDebts(newOrders, newRepayments, prev.customers);
+      // 问题6修复：使用增量重算而非全量重算
+      const newCustomers = target.customerId !== 'guest'
+        ? recalculateCustomerDebt(target.customerId, newOrders, prev.customers)
+        : prev.customers;
 
       // 操作日志
       const opLog: OpLog = {
