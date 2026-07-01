@@ -3,6 +3,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AppData, Product, Order, Customer, Batch, PricingMode, PaymentMethod, ExtraFeeItem, Repayment, Expense, OrderStatus, ProductTemplate, PendingOrder, StockLog, OpLog } from './types';
 import { preciseCalc, downloadJSON } from './utils';
 
+const EXPENSE_CATEGORIES = ['运费', '人工', '包装', '损耗', '其他'];
+
 interface AppContextType {
   data: AppData;
   serverUrl: string;
@@ -160,6 +162,32 @@ const sanitizeData = (incoming: any): AppData => {
 
   cleanCustomers = recalculateAllDebts(cleanOrders, cleanRepayments, cleanCustomers);
 
+  // 同步 batch.extraFees → expenses：确保导入/加载的数据中批次费用也能在经营界面显示
+  const cleanBatches = safeArray<Batch>(incoming.batches, (b) => !!b.id && !!b.plateNumber).map((b: any) => ({
+      ...b,
+      extraFees: Array.isArray(b.extraFees) ? b.extraFees : [],
+      cost: Number(b.cost) || 0,
+      totalWeight: Number(b.totalWeight) || 0,
+  }));
+  const cleanExpenses = safeArray<Expense>(incoming.expenses, (e) => !!e.id);
+  const existingExpenseIds = new Set(cleanExpenses.map(e => e.id));
+  const missingExpenses: Expense[] = [];
+  cleanBatches.forEach(b => {
+    (b.extraFees || []).forEach(f => {
+      if (!existingExpenseIds.has(f.id)) {
+        missingExpenses.push({
+          id: f.id,
+          amount: Number(f.amount) || 0,
+          type: EXPENSE_CATEGORIES.includes(f.name) ? f.name : '其他',
+          date: b.inboundDate || new Date().toISOString().slice(0, 10),
+          note: `批次:${b.plateNumber} - ${f.name}`,
+          batchId: b.id,
+        });
+      }
+    });
+  });
+  const allExpenses = [...missingExpenses, ...cleanExpenses];
+
   return {
     products: safeArray<Product>(incoming.products, (p) => !!p.id && !!p.name).map((p: any) => ({
         ...p,
@@ -171,17 +199,12 @@ const sanitizeData = (incoming: any): AppData => {
         defaultTare: Number(p.defaultTare) || 0,
         lowStockThreshold: Number(p.lowStockThreshold) || 20
     })),
-    batches: safeArray<Batch>(incoming.batches, (b) => !!b.id && !!b.plateNumber).map((b: any) => ({
-        ...b,
-        extraFees: Array.isArray(b.extraFees) ? b.extraFees : [], 
-        cost: Number(b.cost) || 0,
-        totalWeight: Number(b.totalWeight) || 0,
-    })),
+    batches: cleanBatches,
     orders: cleanOrders,
     repayments: cleanRepayments,
     customers: cleanCustomers,
     payees: Array.isArray(incoming.payees) ? incoming.payees.filter((p: any) => typeof p === 'string' && p.trim() !== '') : initialData.payees,
-    expenses: safeArray<Expense>(incoming.expenses, (e) => !!e.id),
+    expenses: allExpenses,
     templates: safeArray<ProductTemplate>(incoming.templates, (t) => !!t.id && !!t.name),
     pendingOrders: safeArray<PendingOrder>(incoming.pendingOrders, (p) => !!p.id && !!p.items),
     stockLogs: safeArray<StockLog>(incoming.stockLogs, (l) => !!l.id && !!l.productId),
